@@ -2,7 +2,15 @@
 
 정상 로그인한 본인 계정으로 카드·원본 영수증을 조회하고, 현대카드 PDF 명세서와 대조한 뒤 전자결재에 임시보관합니다. CLI와 Python 표준 라이브러리를 사용하며, PDF 텍스트 추출에 설치된 Poppler의 `pdftotext`를 사용합니다. 그룹웨어 API를 직접 호출합니다. 외부 AI API·웹 서버·브라우저 자동화는 사용하지 않습니다.
 
-Claude용 진행 절차는 같은 폴더의 `SKILL.md`에 있습니다. 이 저장소를 `~/.claude/skills/jichool`로 클론하면 Claude Code 스킬로 바로 동작합니다. 스킬은 아래 명령과 JSON 응답을 호출할 뿐이며, 새로운 API 연동을 추가하지 않습니다.
+## Claude Code 스킬로 사용하기
+
+아래 한 줄이면 설치가 끝납니다. 설치 후 Claude를 새로 시작하고 "지출결의 해줘"라고 말하면, 나머지 준비(도구 설치·그룹웨어 연결·카드 프로필)는 스킬이 한 단계씩 안내합니다. 아래 명령을 직접 외울 필요는 없습니다.
+
+```sh
+git clone https://github.com/merryAI-dev/jichool.git ~/.claude/skills/jichool
+```
+
+업데이트는 `cd ~/.claude/skills/jichool && git pull` 입니다. Claude가 따르는 진행 절차는 같은 폴더의 `SKILL.md`에 있으며, 스킬은 아래 명령과 JSON 응답을 호출할 뿐 새로운 API 연동을 추가하지 않습니다. 이 아래부터는 명령을 직접 실행하려는 사용자를 위한 설명입니다.
 
 ## 처음 한 번: 설치와 정상 로그인
 
