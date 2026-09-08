@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+.gstack/
+*.session.json
+*.plan.json
+*.transactions.json
+*.review.html
+*.profile.json
+.expense-state/
+*.pdf
+*.har
+*.log
+*.pem
+*.key
+.DS_Store
