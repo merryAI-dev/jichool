@@ -1,6 +1,8 @@
 """Offline host-result replay. Optional argument: a real private event request JSON."""
 import copy
+import base64
 import json
+from urllib.parse import urlencode
 from pathlib import Path
 import subprocess
 import sys
@@ -76,5 +78,26 @@ if __name__ == '__main__':
         assert request['calendar_id'].replace('@', '%40') in handoff['handoff']['template_url']
         run('created', '--event-id', 'user-saved-id')
         assert run('next')['action'] == 'read'
+    with tempfile.TemporaryDirectory() as directory:  # Browser-only host: template URL then eid.
+        root = Path(directory)
+        write_private(root/'request.json', request)
+        write_private(root/'read.json', observation)
+        def run(*args, success=True):
+            result = subprocess.run([sys.executable, 'calendar_harness.py', *args,
+                                     '--state', str(root/'state.json')], capture_output=True, text=True)
+            assert (result.returncode == 0) == success, result.stderr
+            return json.loads(result.stdout) if success else None
+        start = run('start', '--request', str(root/'request.json'))
+        assert request['calendar_id'].replace('@', '%40') in start['template_url']
+        assert urlencode({'text': request['event']['summary']}) in start['template_url']
+        saved = observation['event']['id']
+        eid = base64.urlsafe_b64encode(
+            f"{saved} {request['calendar_id']}".encode()).decode().rstrip('=')
+        run('created', '--eid', 'not-valid-base64-@@@', success=False)
+        run('created', '--eid', eid)
+        assert read_private(root/'state.json')['event_id'] == saved
+        assert run('verify', '--observation', str(root/'read.json'))['event_id'] == saved
+
     print('Harness replay passed: all-day, identity, attendees, recovery and completion gates; no calendar writes')
+    print('Browser path passed: template URL carries the event, eid decodes to the saved id, verify still gates')
     print('Handoff passed: stable UID, all-day dates, single import artifact; import alone never verifies')

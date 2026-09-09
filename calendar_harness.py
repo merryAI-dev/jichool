@@ -1,6 +1,7 @@
 """Host-tool calendar workflow. No OAuth client or remote calls are implemented here."""
 import argparse
 from datetime import date, datetime, timezone
+import base64
 import hashlib
 import json
 from urllib.parse import urlencode
@@ -113,6 +114,19 @@ def template_url(request):
         'add': event['attendees'][0]['email'], 'ctz': 'Asia/Seoul'})
 
 
+def decode_eid(raw):
+    """Google event pages carry ?eid=base64url("<event id> <calendar id>")."""
+    padded = raw + '=' * (-len(raw) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+    except (ValueError, UnicodeDecodeError):
+        raise ValueError('eid를 해석할 수 없습니다. 저장된 일정 주소의 eid 값을 그대로 전달하세요.') from None
+    event_id = decoded.split(' ')[0].strip()
+    if not event_id:
+        raise ValueError('eid에서 일정 ID를 찾을 수 없습니다.')
+    return event_id
+
+
 def next_action(state):
     event = state['request']['event']
     action = {'pending': 'search', 'create_attempted': 'recover_by_search',
@@ -120,12 +134,15 @@ def next_action(state):
               'verified': 'done'}[state['status']]
     return {'action': action, 'calendar_id': state['request']['calendar_id'],
             'event_id': state.get('event_id', event['id']), 'expected_event': event,
+            'template_url': template_url(state['request']),
             'rules': ['Use the host calendar tools; do not start OAuth or call another LLM.',
                       'Search document marker and nickname/date; paginate before creating.',
                       'Require actual all-day support for date fields; invite only the given attendee.',
                       'Record create-attempt before creating; after uncertain responses search, never blind retry.',
                       'Read the saved event before verify; do not fabricate tool observations.',
-                      'With no host create tool, run handoff; never report an imported event as verified.']}
+                      'With no host create tool, run handoff; never report an imported event as verified.',
+                      'With only a browser tool, open template_url, confirm the prefilled fields, save, '
+                      'then pass the saved page eid to created --eid.']}
 
 
 def main():
@@ -135,6 +152,7 @@ def main():
     parser.add_argument('--request')
     parser.add_argument('--observation', help='Private JSON containing actual calendar read result')
     parser.add_argument('--event-id')
+    parser.add_argument('--eid', help='eid query value from a saved Google event page')
     parser.add_argument('--ics', help='Path to write the importable .ics for the handoff action')
     args = parser.parse_args()
     if args.action == 'start':
@@ -152,6 +170,8 @@ def main():
                 raise ValueError('신규 생성 단계가 아닙니다. 기존 일정부터 재조회하세요.')
             state['status'] = 'create_attempted'
         elif args.action == 'created':
+            if args.eid and not args.event_id:
+                args.event_id = decode_eid(args.eid)
             if state['status'] not in ('pending', 'create_attempted', 'handoff_pending') or not args.event_id:
                 raise ValueError('검색/생성으로 확인한 일정 ID가 필요합니다.')
             state.update(status='created', event_id=args.event_id)
