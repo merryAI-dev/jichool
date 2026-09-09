@@ -145,7 +145,7 @@
 
 ## Google Calendar 연결이 안 되어 있을 때
 
-연결된 캘린더 도구가 없어도 **그냥 못 한다고 끝내지 않는다.** OAuth를 새로 붙이거나 다른 프로세스를 띄우지는 않되, [Host Calendar Harness](CALENDAR_HARNESS.md)의 `handoff`로 사용자가 직접 저장할 파일을 만들어 준다.
+연결된 캘린더 도구가 없으면 **먼저 [SKILL.md](SKILL.md)의 연결 안내(①~⑤)로 실제 연결을 끝까지 시도한다.** 사용자가 지금은 어렵다고 하거나 조직 정책으로 막혀 있을 때만 아래로 내려온다. 그때도 **그냥 못 한다고 끝내지 않는다.** OAuth를 새로 붙이거나 다른 프로세스를 띄우지는 않되, [Host Calendar Harness](CALENDAR_HARNESS.md)의 `handoff`로 사용자가 직접 저장할 파일을 만들어 준다.
 
 `python3 calendar_harness.py handoff --state PRIVATE_STATE --ics PRIVATE_ICS`
 
