@@ -1,9 +1,10 @@
 """Read leave balances/history, prepare a request or calendar event; never write remotely."""
 import argparse
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
+import re
 from zoneinfo import ZoneInfo
 
 from expense import Client, ExpenseError, read_private, write_private
@@ -127,9 +128,73 @@ def calendar_event(row, *, nickname, email, account, allow_draft=False):
             'attendees': [{'email': email}], 'description': description}
 
 
+def day_span(start, end):
+    """Inclusive dates a leave covers, so overlap is decided on days, not strings."""
+    first = date.fromisoformat(str(start)[:4] + '-' + str(start)[4:6] + '-' + str(start)[6:8]
+                                  if len(str(start)) == 8 else str(start))
+    last = date.fromisoformat(str(end)[:4] + '-' + str(end)[4:6] + '-' + str(end)[6:8]
+                                 if len(str(end)) == 8 else str(end))
+    if last < first:
+        raise ValueError('종료일이 시작일보다 빠릅니다: ' + str(start) + '~' + str(end))
+    return {first + timedelta(days=n) for n in range((last - first).days + 1)}
+
+
+def reconcile(history, observed):
+    """Compare groupware leave against calendar entries the agent actually read.
+
+    Dates decide a match. Titles vary too much to key on: the same person writes
+    '보람 오후 반차', '보람연차' and '보람 휴가(10/2-10/9) (8일 중 1일)'.
+    """
+    left = [{'source': 'groupware', 'label': row['atNm'], 'days': row.get('ycUseCnt'),
+             'state': {'1': '승인', '0': '결재중', '5': '임시보관'}.get(str(row.get('approState')), str(row.get('approState'))),
+             'start': str(row['startDt']), 'end': str(row['endDt']), 'span': day_span(row['startDt'], row['endDt'])}
+            for row in history if str(row.get('reportCancYn', 'N')) == 'N']
+    right = []
+    for entry in observed:
+        if not entry.get('title') or not entry.get('start'):
+            raise ValueError('캘린더 항목에는 title과 start가 필요합니다: ' + json.dumps(entry, ensure_ascii=False))
+        end = entry.get('end') or entry['start']
+        right.append({'source': 'calendar', 'title': entry['title'].strip(),
+                      'start': entry['start'], 'end': end, 'span': day_span(entry['start'], end)})
+
+    def plain(item):
+        return {k: v for k, v in item.items() if k != 'span'}
+
+    matched, near, used = [], [], set()
+    for a in left:
+        hits = [i for i, b in enumerate(right) if a['span'] & b['span']]
+        if hits:
+            used.update(hits)
+            matched.append({'groupware': plain(a), 'calendar': [plain(right[i]) for i in hits]})
+            continue
+        gaps = [(min(abs((x - y).days) for x in a['span'] for y in b['span']), i)
+                for i, b in enumerate(right)]
+        close = [(gap, i) for gap, i in gaps if gap <= 1]
+        if close:
+            gap, i = min(close)
+            used.add(i)
+            near.append({'gap_days': gap, 'groupware': plain(a), 'calendar': plain(right[i])})
+
+    seen, duplicates = {}, []
+    for b in right:
+        key = (b['start'], b['end'], re.sub(r'\s+', '', b['title']))
+        if key in seen:
+            duplicates.append({'calendar': plain(b), 'count': seen[key] + 1})
+        seen[key] = seen.get(key, 0) + 1
+
+    return {'groupware_count': len(left), 'calendar_count': len(right),
+            'matched': matched, 'near_miss': near,
+            'groupware_only': [plain(a) for a in left
+                               if not any(a is m['groupware'] or plain(a) == m['groupware'] for m in matched)
+                               and not any(plain(a) == n['groupware'] for n in near)],
+            'calendar_only': [plain(b) for i, b in enumerate(right) if i not in used],
+            'calendar_duplicates': duplicates,
+            'note': '캘린더 목록은 에이전트가 읽어온 범위만 반영합니다. 조회 범위가 좁으면 누락이 과장됩니다.'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--action', choices=('status', 'prepare', 'event', 'draft-event'), default='event')
+    parser.add_argument('--action', choices=('status', 'prepare', 'event', 'draft-event', 'reconcile'), default='event')
     parser.add_argument('--year', default=datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y'))
     parser.add_argument('--request', help='Private JSON: type, start, end, reason, optional start_time/end_time')
     parser.add_argument('--output', help='New private output file for a prepared request')
@@ -137,6 +202,7 @@ def main():
     parser.add_argument('--nickname')
     parser.add_argument('--email')
     parser.add_argument('--profile', help='Private JSON containing calendar_id')
+    parser.add_argument('--observed', help='Private JSON: calendar entries the agent actually read')
     parser.add_argument('--journal', help='Verified leave draft journal, only for explicit draft-calendar requests')
     args = parser.parse_args()
     if len(args.year) != 4 or not args.year.isdigit():
@@ -172,6 +238,14 @@ def main():
         event = calendar_event(row, nickname=args.nickname, email=args.email,
                                account=journal['account'], allow_draft=True)
         print(json.dumps({'calendar_id': profile['calendar_id'], 'event': event}, ensure_ascii=False, indent=2))
+        return
+    if args.action == 'reconcile':
+        if not args.observed:
+            parser.error('reconcile requires --observed')
+        observed = read_private(args.observed)
+        entries = observed['entries'] if isinstance(observed, dict) else observed
+        history = leave_status(client, args.year)['history']
+        print(json.dumps(reconcile(history, entries), ensure_ascii=False, indent=2))
         return
     if not all((args.profile, args.link_key, args.nickname, args.email)):
         parser.error('event requires --profile, --link-key, --nickname and --email')

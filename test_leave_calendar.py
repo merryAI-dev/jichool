@@ -30,7 +30,8 @@ def check(rows):
         assert row['linkKey'] not in event['description']
         draft_event = calendar_event({**row, 'approState': '5'}, nickname='테스트',
                                      email='user@example.org', account=['test'], allow_draft=True)
-        assert draft_event['id'] == event['id'] and '임시보관' in draft_event['description']
+        assert draft_event['id'] == event['id']  # Same document, same id, whether drafted or submitted.
+        assert draft_event['description'] == event['description'] == 'leave-sync:' + event['id']
         if row['atNm'] == '연차':
             expected = date.fromisoformat(row['endDt']) + timedelta(days=1)
             assert event['end'] == {'date': expected.isoformat()}
@@ -56,3 +57,32 @@ if __name__ == '__main__':
         rows = [{**base, 'atNm': '연차'},
                 {**base, 'atNm': '오후반차', 'endDt': '20300107', 'startTm': '1430'}]
     check(rows)
+
+    # Reconcile: dates decide, titles are advisory, cancelled leave is out of scope.
+    from leave_calendar import reconcile
+    history = [
+        dict(atNm='연차', ycUseCnt=1.0, approState='1', reportCancYn='N', startDt='20300127', endDt='20300127'),
+        dict(atNm='오후반차', ycUseCnt=0.5, approState='1', reportCancYn='N', startDt='20300330', endDt='20300330'),
+        dict(atNm='연차', ycUseCnt=3.0, approState='1', reportCancYn='N', startDt='20301006', endDt='20301008'),
+        dict(atNm='연차', ycUseCnt=1.0, approState='1', reportCancYn='Y', startDt='20300505', endDt='20300505'),
+    ]
+    observed = [
+        {'title': '보람 오후 반차', 'start': '2030-03-31'},          # one day off
+        {'title': '보람 휴가(10/2-10/9)', 'start': '2030-10-02', 'end': '2030-10-09'},  # overlaps
+        {'title': '보람 대체휴무', 'start': '2030-04-09'},           # calendar only
+        {'title': '보람 대체휴무', 'start': '2030-04-09'},           # duplicate
+    ]
+    result = reconcile(history, observed)
+    assert result['groupware_count'] == 3, '취소 건은 제외한다'
+    assert [m['groupware']['start'] for m in result['matched']] == ['20301006']
+    assert [(n['gap_days'], n['calendar']['start']) for n in result['near_miss']] == [(1, '2030-03-31')]
+    assert [g['start'] for g in result['groupware_only']] == ['20300127']
+    assert [c['start'] for c in result['calendar_only']] == ['2030-04-09', '2030-04-09']
+    assert len(result['calendar_duplicates']) == 1
+    try:
+        reconcile(history, [{'title': '보람 연차'}])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('start 없는 항목은 거부해야 한다')
+    print('Reconcile passed: overlap matches, one-day gaps flagged, cancelled excluded, duplicates reported')
