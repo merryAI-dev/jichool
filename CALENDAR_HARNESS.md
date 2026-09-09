@@ -42,4 +42,4 @@ If the required tools are missing, leave the run pending and state the missing c
 
 All shorthand commands above use `python3 calendar_harness.py` as their prefix.
 The state file is a local checkpoint, not a user database. Keep it and all tool observations
-inside the ignored `.expense-state/` directory with permissions 600.
+inside `~/.config/mysc-expense/state/` with permissions 600, never inside the skill folder.
