@@ -85,4 +85,17 @@ if __name__ == '__main__':
         pass
     else:
         raise AssertionError('start 없는 항목은 거부해야 한다')
+    # A wider calendar span is normal: it covers weekends and holidays the leave does not.
+    wide = [dict(atNm='연차', ycUseCnt=3.0, approState='1', reportCancYn='N',
+                 startDt='20301006', endDt='20301008')]
+    away = [{'title': '보람 휴가', 'start': '2030-10-02', 'end': '2030-10-09'}]
+    holidays = {date(2030, 10, 3): '개천절', date(2030, 10, 9): '한글날'}
+    bare = reconcile(wide, away)
+    assert [u['date'] for u in bare['unaccounted_workdays']] == ['2030-10-02', '2030-10-03', '2030-10-04', '2030-10-09']
+    aware = reconcile(wide, away, holidays)
+    assert [u['date'] for u in aware['unaccounted_workdays']] == ['2030-10-02', '2030-10-04'], '휴일과 주말은 빠져야 한다'
+    assert aware['matched'], '기간이 겹치면 여전히 일치로 본다'
+    dup = reconcile(history, observed, {})
+    assert '2030-03-31' not in [u['date'] for u in dup['unaccounted_workdays']], '하루 어긋남은 중복 보고하지 않는다'
     print('Reconcile passed: overlap matches, one-day gaps flagged, cancelled excluded, duplicates reported')
+    print('Holiday filter passed: an eight-day away span narrows to the single unexplained workday')

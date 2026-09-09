@@ -7,7 +7,7 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
-from expense import Client, ExpenseError, read_private, write_private
+from expense import API, Client, ExpenseError, read_private, write_private
 
 
 def leave_balance(info):
@@ -139,7 +139,14 @@ def day_span(start, end):
     return {first + timedelta(days=n) for n in range((last - first).days + 1)}
 
 
-def reconcile(history, observed):
+def company_holidays(client, year):
+    """Public holidays as the groupware defines them; never a hardcoded Korean calendar."""
+    rows = client.post(API + '0ap00013', {'searchYears': str(year)})
+    return {date.fromisoformat(str(r['holiDt'])[:4] + '-' + str(r['holiDt'])[4:6] + '-' + str(r['holiDt'])[6:8]): r.get('holiNm', '')
+            for r in rows if str(r.get('holiYn', 'Y')) == 'Y' and r.get('holiDt')}
+
+
+def reconcile(history, observed, holidays=None):
     """Compare groupware leave against calendar entries the agent actually read.
 
     Dates decide a match. Titles vary too much to key on: the same person writes
@@ -182,14 +189,29 @@ def reconcile(history, observed):
             duplicates.append({'calendar': plain(b), 'count': seen[key] + 1})
         seen[key] = seen.get(key, 0) + 1
 
+    holidays = holidays or {}
+    covered = set().union(*[a['span'] for a in left]) if left else set()
+    explained = {(n['calendar']['start'], n['calendar']['end'], n['calendar']['title']) for n in near}
+    unaccounted = []
+    for b in right:
+        if (b['start'], b['end'], b['title']) in explained:
+            continue  # A one-day gap already reports this; do not raise it twice.
+        for day in sorted(b['span'] - covered):
+            if day.weekday() >= 5 or day in holidays:
+                continue
+            unaccounted.append({'date': day.isoformat(), 'calendar_title': b['title'],
+                                'calendar_span': b['start'] + '~' + b['end']})
+
     return {'groupware_count': len(left), 'calendar_count': len(right),
+            'unaccounted_workdays': unaccounted,
             'matched': matched, 'near_miss': near,
             'groupware_only': [plain(a) for a in left
                                if not any(a is m['groupware'] or plain(a) == m['groupware'] for m in matched)
                                and not any(plain(a) == n['groupware'] for n in near)],
             'calendar_only': [plain(b) for i, b in enumerate(right) if i not in used],
             'calendar_duplicates': duplicates,
-            'note': '캘린더 목록은 에이전트가 읽어온 범위만 반영합니다. 조회 범위가 좁으면 누락이 과장됩니다.'}
+            'note': '캘린더 목록은 에이전트가 읽어온 범위만 반영합니다. 조회 범위가 좁으면 누락이 과장됩니다. '
+                    '주말과 회사 휴일은 unaccounted_workdays에서 제외했습니다.'}
 
 
 def main():
@@ -245,7 +267,8 @@ def main():
         observed = read_private(args.observed)
         entries = observed['entries'] if isinstance(observed, dict) else observed
         history = leave_status(client, args.year)['history']
-        print(json.dumps(reconcile(history, entries), ensure_ascii=False, indent=2))
+        print(json.dumps(reconcile(history, entries, company_holidays(client, args.year)),
+                         ensure_ascii=False, indent=2))
         return
     if not all((args.profile, args.link_key, args.nickname, args.email)):
         parser.error('event requires --profile, --link-key, --nickname and --email')
