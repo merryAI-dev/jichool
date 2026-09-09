@@ -122,7 +122,7 @@ def calendar_event(row, *, nickname, email, account, allow_draft=False):
     identity = json.dumps([account, row['linkKey']], ensure_ascii=False)
     event_id = hashlib.sha256(identity.encode()).hexdigest()
     marker = 'leave-sync:' + event_id
-    description = ('그룹웨어 임시보관 문서의 예정 휴가입니다.\n' if row.get('approState') == '5' else '') + marker
+    description = marker  # One line, no status text: shared calendars reject some payloads silently.
     return {'id': event_id, 'summary': nickname.strip() + ' ' + row['atNm'], **times,
             'attendees': [{'email': email}], 'description': description}
 

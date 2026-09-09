@@ -108,10 +108,11 @@ def template_url(request):
     else:
         span = '/'.join(datetime.fromisoformat(event[f]['dateTime']).astimezone(timezone.utc)
                         .strftime('%Y%m%dT%H%M%SZ') for f in ('start', 'end'))
+    # No 'add': a shared calendar silently drops a save that also invites. Invite after saving.
     return 'https://calendar.google.com/calendar/render?' + urlencode({
         'action': 'TEMPLATE', 'text': event['summary'], 'dates': span,
         'details': event['description'], 'src': request['calendar_id'],
-        'add': event['attendees'][0]['email'], 'ctz': 'Asia/Seoul'})
+        'ctz': 'Asia/Seoul'})
 
 
 def decode_eid(raw):
