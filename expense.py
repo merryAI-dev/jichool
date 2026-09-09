@@ -33,6 +33,16 @@ ORIGIN = "https://gw.mysc.co.kr"
 API = "/personal/APB1020New/"
 CONFIG = Path.home() / ".config" / "mysc-expense"
 SESSION = CONFIG / "session.json"
+HUMAN_READ_APIS = {
+    "/human/common/attendapplication/getApplicationBaseInfo",
+    "/human/common/attendapplication/getStartTmEndTmByWorkType",
+    "/human/common/attendapplication/calculateApplicationDays",
+    "/human/attendapplication/validateNew",
+}
+HUMAN_DRAFT_APIS = {
+    "/human/attendapplication/create",
+    "/human/openapi/attendapplication/saveLinkKey",
+}
 
 
 class ExpenseError(Exception):
@@ -128,7 +138,7 @@ class Client:
 
     def post(self, path, params, *, pdf=None, binary=False):
         self.last_response = None
-        if not path.startswith(("/personal/", "/system/", "/eap/", "/ecm/")) or "?" in path or ".." in path:
+        if (not path.startswith(("/personal/", "/system/", "/eap/", "/ecm/")) and path not in HUMAN_READ_APIS | HUMAN_DRAFT_APIS) or "?" in path or ".." in path:
             raise ExpenseError("지원하지 않는 그룹웨어 요청 경로입니다.")
         payload = {**params, "coCd": self.erp["companyCode"], "vPCoCd": self.erp["companyCode"]}
         headers = signed_headers(self.session["token"], self.session["signKey"],
@@ -1073,10 +1083,21 @@ def eap_draft_payload(initial, client, plan, appro_key, contents, attachments=()
     uc, form = client.uc, data["form_info"]
     if str(form["form_id"]) != "1211" or str(data["outProcessInfo"]["contents_tp"]) != "3":
         raise ExpenseError("검증한 법인카드 양식만 임시저장할 수 있습니다.")
+    return native_draft_payload(initial, client, plan["head"]["docTitle"], appro_key, contents, attachments)
+
+
+def native_draft_payload(initial, client, title, appro_key, contents, attachments=()):
+    """Shared native JSON-bound draft envelope. Submission is deliberately not exposed."""
+    data = initial["resultMap"]
+    if data.get("appdocinfo") or len(data["docnumtype"]) != 1 or not data["hidAppDocLine"]:
+        raise ExpenseError("신규 전자결재 기본 설정을 확인할 수 없습니다.")
+    if str(data["outProcessInfo"]["contents_tp"]) != "3" or not data["outProcessForm"].get("outBindData"):
+        raise ExpenseError("전자결재 원본 JSON 연결 데이터가 없습니다.")
+    uc, form = client.uc, data["form_info"]
     params = {"doc_id": 0, "form_id": int(form["form_id"]), "numbering_id": data["docnumtype"][0]["cd_val"],
               "rep_dt": None, "repdt_mod_yn": "0", "co_id": uc["compSeq"], "dept_id": uc["deptSeq"],
               "biz_id": uc["bizSeq"], "user_id": uc["empSeq"], "co_nm": uc["compName"],
-              "dept_nm": uc["deptName"], "user_nm": uc["empName"], "doc_title": plan["head"]["docTitle"],
+              "dept_nm": uc["deptName"], "user_nm": uc["empName"], "doc_title": title,
               "doc_sts": "10", "inservice_time": str(form.get("inservice_life") or ""),
               "doc_level": form.get("doc_level") or "", "emergency_level": "", "doc_security": "0", "use_yn": "1",
               "approkey": appro_key, "contents_tp": "10", "doc_contents": urllib.parse.quote(contents, safe="~()*!.'-"),

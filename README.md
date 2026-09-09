@@ -2,7 +2,7 @@
 
 정상 로그인한 본인 계정으로 카드·원본 영수증을 조회하고, 현대카드 PDF 명세서와 대조한 뒤 전자결재에 임시보관합니다. CLI와 Python 표준 라이브러리를 사용하며, PDF 텍스트 추출에 설치된 Poppler의 `pdftotext`를 사용합니다. 그룹웨어 API를 직접 호출합니다. 외부 AI API·웹 서버·브라우저 자동화는 사용하지 않습니다.
 
-Claude용 SKILL.md는 포함하지 않습니다. 아래 명령과 JSON 응답을 스킬에서 호출하면 됩니다.
+지출결의용 Claude SKILL.md는 포함하지 않습니다. 아래 명령과 JSON 응답을 스킬에서 호출하면 됩니다.
 
 ## 처음 한 번: 설치와 정상 로그인
 
@@ -183,3 +183,31 @@ python3 test_expense.py /비공개/실제.plan.json /비공개/신규양식조�
 | 제안 기준·기본 날짜 | 최근 183일의 본인 승인 이력, 최소 2개 문서의 일치, 사용월 말일·한국 날짜 기준 작성일 |
 
 테스트의 기본 입력은 가상 사용자·가상 카드입니다. 선택적인 실제 파일 검증은 사용자가 로컬에서 전달한 비공개 파일을 읽으며, 해당 파일을 저장소에 복사하지 않습니다. 모든 회사·카드사·양식에 대응하는 범용 연동 도구는 아닙니다.
+
+## 휴가 조회와 임시저장
+
+`leave_calendar.py`는 같은 정상 로그인 세션으로 본인 연차 잔여·사용 내역을 조회하고,
+서버 근무표·휴일·차감 일수로 신청안을 준비합니다. `leave_draft.py`는 본인의 단일
+연속 휴가 기간을 정상 양식과 결재선으로 임시저장하고 저장된 본문을 재조회합니다.
+실제 결재 상신은 구현하지 않았습니다.
+
+```sh
+python3 leave_calendar.py --action status
+python3 leave_calendar.py --action prepare --request .expense-state/leave-request.json --output .expense-state/leave-prepared.json
+python3 leave_draft.py --request .expense-state/leave-request.json --journal .expense-state/leave-draft.json
+```
+
+요청 JSON은 `type`, `start`, `end`, `reason`을 사용합니다. 날짜는 `YYYY-MM-DD`,
+시간 직접 입력 항목의 `start_time`, `end_time`은 `HH:MM`입니다. 파일 권한은 600으로
+설정합니다. 근태 항목과 사유 필수 여부는 현재 서버 설정을 따릅니다.
+같은 작업의 재개에는 같은 journal을 사용합니다. 임시저장 응답이 유실되면 실제
+문서 번호·상태·내용으로 판정하며, 결과를 확인할 수 없는 쓰기를 반복하지 않습니다.
+
+```sh
+python3 test_leave_calendar.py
+python3 test_leave_calendar.py /비공개/휴가내역.json
+python3 test_leave_draft.py /비공개/저장기록.json /비공개/저장문서조회.json
+```
+
+비공개 실제 데이터로 근무표·일수 계산, 임시저장, 저장 응답 오류 후 재조회 및 본문 대조를
+검증했습니다. 실제 휴가 내역·사유·문서 번호·개인 캘린더 설정은 저장소에 포함하지 않습니다.
