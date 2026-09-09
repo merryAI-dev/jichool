@@ -40,6 +40,27 @@ If the required tools are missing, leave the run pending and state the missing c
    is not success when the user also requested a calendar event. Do not claim the invitation
    was accepted or appeared in the attendee inbox merely because the event contains them.
 
+## When the host has no calendar create tool
+
+Do not stop at "not connected" and do not start OAuth. Run the handoff instead, which
+produces artifacts the user can save themselves:
+
+`python3 calendar_harness.py handoff --state PRIVATE_STATE --ics PRIVATE_ICS`
+
+The `.ics` carries the document-derived UID, so importing it twice updates the same event
+rather than creating a second one. This is why handoff is safe without the duplicate search
+that step 3 requires. The printed `template_url` is a prefilled Google form; it creates
+nothing until the user presses save.
+
+Hand the user the `.ics` file, or the link, and say which one you are giving them. Handoff
+runs once per state; a second call is refused so two conflicting artifacts never circulate.
+
+`handoff` sets `handoff_pending`, and `next` then returns `await_user_import`. **This is not
+completion.** `verify` stays closed until an actual read of the saved event arrives. If the
+user later supplies the saved event's ID, record it with `created` and continue into the
+normal read-and-verify steps. Until that happens, report the leave as saved in groupware and
+the calendar entry as handed over but unconfirmed.
+
 All shorthand commands above use `python3 calendar_harness.py` as their prefix.
 The state file is a local checkpoint, not a user database. Keep it and all tool observations
 inside `~/.config/mysc-expense/state/` with permissions 600, never inside the skill folder.
