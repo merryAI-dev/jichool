@@ -347,7 +347,7 @@ def make_plan(snapshot):
             "deptCd": account["deptCode"], "deptNm": account["deptName"],
             "divCd": snapshot["division"]["divCd"], "divNm": snapshot["division"]["divNm"],
             "gisu": snapshot["gisu"]["gisu"], "isuDt": snapshot.get("accountingDate", snapshot["period"]["to"]),
-            "docTitle": "법인카드 지출결의 " + snapshot["period"]["from"] + "~" + snapshot["period"]["to"],
+            "docTitle": f"미지급직원_{account['userName']}_{int(snapshot['period']['from'][4:6])}월",
             "docugroupYn": "Y", "onlyCashFg": "1", "fileGroup": "0", "fileDc": "",
             "pjtCd": "", "pjtNm": "", "consDocTitle": "", "exdocuYn": "N"}
     rows, seen = [], set()
