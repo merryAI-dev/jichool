@@ -43,10 +43,16 @@ pdftotext -v
 brew install poppler
 ```
 
-1. 사용자가 브라우저에서 `https://gw.mysc.co.kr`에 평소 방식으로 로그인합니다. SSO·추가 인증도 직접 완료합니다.
-2. 개발자 도구의 Network를 열고 정상 로그인 과정의 응답을 확인합니다. `auth_a_token`, `hash_key`, `ucUserInfo`, `erpUserInfo`가 들어 있는 로그인 성공 응답을 찾습니다. 필요하면 Network를 연 상태에서 정상 로그인 과정을 다시 진행합니다.
-3. 해당 요청의 **Copy response**로 응답을 클립보드에 복사합니다. 인증정보를 채팅, 코드, 명령행 인수에 붙여 넣지 않습니다.
-4. 아래 명령을 실행합니다. 세션 객체 자체와 `resultData.sessionInfo`로 감싼 로그인 응답을 모두 받습니다.
+1. 사용자가 브라우저에서 `https://gw.mysc.co.kr`에 평소 방식으로 로그인합니다. SSO·추가 인증도 직접 완료합니다. 이미 로그인돼 있으면 그대로 씁니다.
+2. 그 그룹웨어 탭에서 개발자 도구 Console(`option`+`command`+`J`)을 열고 아래 한 줄을 실행합니다. 그룹웨어 화면은 현재 세션(`auth_a_token`, `hash_key`, `ucUserInfo`, `erpUserInfo`)을 `sessionStorage.userInfo`에 보관하고 모든 요청을 이 값으로 서명하므로, 항상 화면이 쓰는 최신 세션이 복사됩니다. 값은 화면에 출력되지 않고 클립보드로만 갑니다.
+
+   ```js
+   copy(sessionStorage.userInfo ?? ''); sessionStorage.userInfo ? '복사 완료' : '로그인 정보 없음'
+   ```
+
+   Chrome이 처음 붙여넣기를 막으면 `allow pasting`을 직접 입력한 뒤 다시 붙여넣습니다.
+3. 인증정보를 채팅, 코드, 명령행 인수에 붙여 넣지 않습니다.
+4. 아래 명령을 실행합니다. 세션 객체 자체(`sessionStorage.userInfo`)와 `resultData.sessionInfo`로 감싼 로그인 응답을 모두 받습니다.
 
 ```sh
 python3 expense.py auth --clipboard

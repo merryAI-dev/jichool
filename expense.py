@@ -1394,7 +1394,7 @@ def draft(args):
 def authenticate(args):
     if args.status:
         if not SESSION.exists():
-            raise ExpenseError("저장된 세션이 없습니다. README의 정상 로그인 안내 후 auth --clipboard를 실행하세요.")
+            raise ExpenseError("저장된 세션이 없습니다. 그룹웨어 탭 Console에서 README의 복사 코드를 실행한 뒤 auth --clipboard를 실행하세요.")
         client = Client()
         client.flags("S0", "01")
         print(json.dumps({"authenticated": True, "employee": client.erp["userName"], "department": client.erp["deptName"]}, ensure_ascii=False))
@@ -1407,7 +1407,11 @@ def authenticate(args):
         raw = sys.stdin.read()
     else:
         raw = getpass.getpass("그룹웨어 사용자 세션 JSON (화면에 표시되지 않음): ")
-    session = session_from_user_info(json.loads(raw))
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        raise ExpenseError("복사된 로그인 정보가 없거나 형식이 다릅니다. 그룹웨어 탭 Console에서 복사 코드를 다시 실행하세요.") from None
+    session = session_from_user_info(info)
     Client(session).flags("S0", "01")
     write_private(SESSION, session, replace=True)
     if args.clipboard:
