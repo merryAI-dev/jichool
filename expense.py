@@ -998,7 +998,8 @@ def native_binding(initial):
     return json.loads(raw)
 
 
-def render_native(initial, uc, title, today):
+def render_native(initial, uc, title, today, layout=(2, 2), body_hook=None):
+    """layout은 반복 표의 (머리 행 수, 거래당 행 수). 1211은 (2, 2), 1210은 (3, 3)."""
     binding = native_binding(initial)
     def fill(template, values):
         def replace(match):
@@ -1026,14 +1027,19 @@ def render_native(initial, uc, title, today):
         raise ExpenseError("전자결재 반복 표 서식이 변경됐습니다.")
     table = tables[0]
     template_rows = list(re.finditer(r"<tr\b[^>]*>.*?</tr>", table[2], re.S | re.I))
-    if len(template_rows) != 4 or any("mapping_key=" in row[0] for row in template_rows[:2]):
+    header, size = layout
+    if (len(template_rows) != header + size or any("mapping_key=" in row[0] for row in template_rows[:header])
+            or not all("mapping_key=" in row[0] for row in template_rows[header:])):
         raise ExpenseError("전자결재 행 서식이 변경됐습니다.")
-    # ponytail: 현재 양식 1211의 두 줄짜리 반복 행만 지원. 양식 변경 시 실제 서식부터 재검증.
-    row_template = table[2][template_rows[2].start():template_rows[3].end()]
+    # ponytail: 검증한 양식(1211, 1210)의 반복 행 구성만 지원. 양식 변경 시 실제 서식부터 재검증.
+    first, last = template_rows[header], template_rows[-1]
+    row_template = table[2][first.start():last.end()]
     expanded = "".join(fill(row_template, {**binding["ITEMS"], **group["items"]})
                        for group in binding["TABLE"]["table2"]["group"])
-    inner = table[2][:template_rows[2].start()] + expanded + table[2][template_rows[3].end():]
+    inner = table[2][:first.start()] + expanded + table[2][last.end():]
     body = fill(body[:table.start()] + table[1] + inner + table[3] + body[table.end():], binding["ITEMS"])
+    if body_hook:
+        body = body_hook(body)
     values = {"_DF01_": "", "_DF02_": today, "_DF03_": uc["deptName"],
               "_DF04_": uc["empName"], "_DF10_": title}
     result = initial["html"]
@@ -1066,13 +1072,13 @@ def eap_init(client, form_id, appro_key="", doc_id=0):
                        "pageCode": "UBAP001", "lineType": "", "appLineId": ""})
 
 
-def eap_draft_payload(initial, client, plan, appro_key, contents, attachments=()):
+def eap_draft_payload(initial, client, plan, appro_key, contents, attachments=(), form_id="1211"):
     data = initial["resultMap"]
     if data.get("appdocinfo") or len(data["docnumtype"]) != 1 or not data["hidAppDocLine"]:
         raise ExpenseError("신규 전자결재 기본 설정을 확인할 수 없습니다.")
     uc, form = client.uc, data["form_info"]
-    if str(form["form_id"]) != "1211" or str(data["outProcessInfo"]["contents_tp"]) != "3":
-        raise ExpenseError("검증한 법인카드 양식만 임시저장할 수 있습니다.")
+    if str(form["form_id"]) != str(form_id) or str(form_id) not in ("1211", "1210") or str(data["outProcessInfo"]["contents_tp"]) != "3":
+        raise ExpenseError("검증한 지출결의 양식(1211 법인카드, 1210 세금계산서)만 임시저장할 수 있습니다.")
     params = {"doc_id": 0, "form_id": int(form["form_id"]), "numbering_id": data["docnumtype"][0]["cd_val"],
               "rep_dt": None, "repdt_mod_yn": "0", "co_id": uc["compSeq"], "dept_id": uc["deptSeq"],
               "biz_id": uc["bizSeq"], "user_id": uc["empSeq"], "co_nm": uc["compName"],
