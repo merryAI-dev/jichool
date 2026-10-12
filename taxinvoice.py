@@ -204,6 +204,20 @@ def card_matches(client, card_name, invoice, today):
             for row in client.cards(start, end, card_name) if won(row["sunginAm"]) == invoice["total"]]
 
 
+def card_memo_candidates(history, merchants):
+    """같은 가맹점의 승인된 카드 결의(1211) 적요. 많이 쓴 순, 같으면 최근 순."""
+    counts, latest = {}, {}
+    for document in history:
+        if str(document["head"].get("approState")) != "1":
+            continue
+        for row in document["detail"]:
+            memo = str(row.get("rmkDc") or "").strip()
+            if memo and any(same_party(row.get("trNm"), merchant) for merchant in merchants):
+                counts[memo] = counts.get(memo, 0) + 1
+                latest[memo] = max(latest.get(memo, ""), row.get("issDt") or "")
+    return sorted(([memo, count] for memo, count in counts.items()), key=lambda item: (-item[1], latest[item[0]][::-1]))
+
+
 def korean_date(value):
     return f"{int(value[4:6])}월 {int(value[6:])}일"
 
@@ -258,7 +272,7 @@ def build_plan(invoices, context, options):
         if accounting[:4] != invoice["issued"][:4]:
             issues.append(f"{label}: 회계일과 증빙일의 연도가 다릅니다(그룹웨어 규칙).")
         elif accounting != invoice["issued"]:
-            warnings.append(f"{label}: 회계일({accounting})이 작성일자({invoice['issued']})와 다릅니다. 증빙일≠회계일로 반려된 적이 있으니 재경팀 확인을 권합니다.")
+            warnings.append(f"{label}: 회계일({accounting})이 작성일자({invoice['issued']})와 다릅니다. 승인된 문서는 모두 같게 올렸습니다. 재경팀 확인을 권합니다.")
         matches, paid, paid_by = context["cardMatches"].get(invoice["approval"], []), "", None
         if mode == "recognition":
             if paid_dates:
@@ -271,10 +285,8 @@ def build_plan(invoices, context, options):
         precedent = vendor_precedent(context["documents"], supplier)
         items.append({"invoice": invoice, "supplier": supplier, "precedent": precedent,
                       "cardMatches": matches, "paidDate": paid, "paidBy": paid_by})
-    first = items[0]["precedent"]
-    title = (options.get("title") or (first["head"]["docTitle"] if first and len(invoices) == 1 else "")).strip()
-    if not title:
-        issues.append("문서 제목 확인 필요 (--title). 예: 기타지급수수료_서버 사용료")
+    if accounting[:6] < context["today"][:6]:
+        warnings.append(f"{int(accounting[4:6])}월 회계분입니다. 재경팀 월마감 전에 상신·결재까지 끝내야 합니다 (재경팀 요청 예: 5/13까지 재상신·결재).")
     banking = account_precedent(context["documents"], mode, items[0]["supplier"], company)
     if not banking:
         issues.append("수취 은행·계좌를 가져올 승인된 이전 1210 문서가 없습니다. "
@@ -289,7 +301,7 @@ def build_plan(invoices, context, options):
     head = {"coCd": account["companyCode"], "empCd": account["userCode"], "empNm": account["userName"],
             "deptCd": account["deptCode"], "deptNm": account["deptName"],
             "divCd": context["division"]["divCd"], "divNm": company,
-            "gisu": context["gisu"]["gisu"], "isuDt": accounting, "docTitle": title,
+            "gisu": context["gisu"]["gisu"], "isuDt": accounting, "docTitle": "",
             "docugroupYn": "Y", "onlyCashFg": "1", "fileGroup": "0", "fileDc": "",
             "pjtCd": "", "pjtNm": "", "consDocTitle": "", "exdocuYn": "N"}
     snapshot = {"dateRules": context["dateRules"], "accountingDate": accounting,
@@ -303,7 +315,19 @@ def build_plan(invoices, context, options):
         memos = options.get("memo") or []
         if memos and len(memos) not in (1, len(items)):
             raise ExpenseError("--memo는 한 번(모든 행 공통) 또는 PDF 개수만큼 지정하세요.")
-        memo = memos[index if len(memos) > 1 else 0] if memos else previous.get("rmkDc", "")
+        card_memos = context.get("cardMemos", {}).get(invoice["approval"], []) if mode == "recognition" else []
+        if memos:
+            memo = memos[index if len(memos) > 1 else 0]
+        elif card_memos:
+            # 같은 결제를 카드 결의와 세금계산서 결의에 같은 적요로 남긴다.
+            memo = card_memos[0][0]
+            others = ", ".join(f"'{text}' {count}회" for text, count in card_memos[1:])
+            if len(card_memos) > 1 and card_memos[1][1] == card_memos[0][1]:
+                issues.append(f"{index + 1}행: 카드 결의 적요가 갈립니다 ('{memo}' {card_memos[0][1]}회, {others}). --memo로 정하세요.")
+            elif others:
+                warnings.append(f"{index + 1}행: 카드 결의에서 가장 많이 쓴 적요 '{memo}'를 썼습니다. 다른 표현: {others}")
+        else:
+            memo = previous.get("rmkDc", "")
         row = {"coCd": account["companyCode"], "cardDt": "", "cardSq": 0, "sunginNb": "", "vatGroupDc": "",
                "cardCd": "", "cardNm": "", "cardTrCd": "", "cardFg": "",
                "issDt": invoice["issued"], "sumAm": invoice["total"], "vatAm": invoice["vat"], "supAm": invoice["supply"],
@@ -324,6 +348,12 @@ def build_plan(invoices, context, options):
         if not item["precedent"]:
             warnings.append(f"{index + 1}행: '{item['supplier']}'로 승인된 이전 문서가 없어 적요·용도·프로젝트를 새로 정해야 합니다.")
         rows.append(row)
+    title = (options.get("title") or "").strip()
+    if not title and len(rows) == 1 and rows[0]["cashNm"] and rows[0]["rmkDc"]:
+        title = f"{rows[0]['cashNm']}_{rows[0]['rmkDc']}"  # 승인된 1210 제목 형식: 용도_내용
+    if not title:
+        issues.append("문서 제목 확인 필요 (--title). 형식: 용도_내용 (예: 기타지급수수료_서버 사용료)")
+    head["docTitle"] = title
     notes = options.get("notes") or default_notes(mode, items)
     files = [invoice["file"] for invoice in invoices] + list(options.get("attach") or [])
     attachments = []
@@ -363,10 +393,15 @@ def gather(client, invoices, profile_path):
     profile = {}
     if profile_path and Path(profile_path).expanduser().exists():
         profile = ex.load_profile(Path(profile_path).expanduser(), client.erp)
-    matches = {}
+    matches, memos = {}, {}
     if profile.get("cardName"):
         for invoice in invoices:
             matches[invoice["approval"]] = card_matches(client, profile["cardName"], invoice, today)
+    if any(matches.values()):
+        start = (dt.datetime.strptime(today, "%Y%m%d") - dt.timedelta(days=183)).strftime("%Y%m%d")
+        history = client.history(start, today, "1211")
+        for approval, found in matches.items():
+            memos[approval] = card_memo_candidates(history, {item["merchant"] for item in found})
     return {"today": today, "account": client.erp, "division": divisions[0], "documents": documents,
             "form": form_record(client, FORM_ID), "attrCodes": attr_codes,
             "gisu": client.post("/system/financialApi/selectGisuData", {"frDt": max(i["issued"] for i in invoices)}),
@@ -376,7 +411,7 @@ def gather(client, invoices, profile_path):
                 "helpTy": "ACASHCD_TYPE_CODE", "langkind": "KOR", "multiCode": [int(FORM_ID)]}),
             "projects": client.codepicker("SPJT_CODE_AUTH", empCd=client.erp["userCode"], useYn="ALL"),
             "duplicates": {invoice["approval"]: find_duplicates(documents, invoice) for invoice in invoices},
-            "defaultProject": profile.get("defaultProject", ""), "cardMatches": matches}
+            "defaultProject": profile.get("defaultProject", ""), "cardMatches": matches, "cardMemos": memos}
 
 
 def options_from(args):
@@ -424,6 +459,8 @@ def validate(client, plan):
         raise ExpenseError("검토 파일과 현재 로그인 계정이 다릅니다.")
     if plan["issues"]:
         raise ExpenseError("확인할 항목이 남았습니다:\n" + "\n".join(plan["issues"]))
+    if any(row["issDt"] != invoice["issued"] for row, invoice in zip(plan["rows"], plan["invoices"])):
+        raise ExpenseError("증빙일자는 세금계산서 작성일자여야 합니다(재경팀 반려 사유).")
     for invoice in plan["invoices"]:
         if read_invoice(invoice["file"]) != invoice:
             raise ExpenseError("세금계산서 PDF가 검토 이후 변경됐습니다: " + Path(invoice["file"]).name)
@@ -687,8 +724,8 @@ def main():
     command.add_argument("--mode", choices=("recognition", "payment"), help="기본은 PDF의 [영수]/[청구]")
     command.add_argument("--profile", default=str(CONFIG / "state" / "me.profile.json"))
     command.add_argument("--vendor", help="거래처 이름. 기본은 PDF의 공급자 상호")
-    command.add_argument("--title", help="문서 제목. 기본은 같은 거래처 이전 승인 문서 제목(한 장일 때)")
-    command.add_argument("--memo", action="append", help="적요. PDF 순서대로 반복. 기본은 같은 거래처 이전 적요")
+    command.add_argument("--title", help="문서 제목. 기본은 '용도_적요'(한 장일 때)")
+    command.add_argument("--memo", action="append", help="적요. PDF 순서대로 반복. 기본은 짝 카드 결의 적요 → 같은 거래처 이전 1210 적요")
     command.add_argument("--purpose", help="용도 코드(1210 양식 기준). 기본은 이전 문서 또는 0350 기타지급수수료")
     command.add_argument("--project", help="프로젝트 코드")
     command.add_argument("--accounting-date", help="회계일. 기본은 작성일자(증빙일과 같게)")

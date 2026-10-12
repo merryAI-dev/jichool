@@ -123,7 +123,22 @@ def check_plan():
         # 인식용 기본: 이전 승인 문서의 제목·적요·용도·프로젝트, 회사 계좌, 출금계좌 비움, 증빙일=회계일
         plan = tax.build_plan(items, context(directory, cardMatches=matched), {"attach": [str(card)]})
         row = plan["rows"][0]
-        assert plan["mode"] == "recognition" and plan["issues"] == [] and plan["warnings"] == []
+        assert plan["mode"] == "recognition" and plan["issues"] == []
+        assert len(plan["warnings"]) == 1 and "월마감" in plan["warnings"][0]
+        assert plan["head"]["docTitle"] == "기타지급수수료_서버 사용료"
+        same_month = tax.build_plan(items, context(directory, cardMatches=matched, today="20260930"), {"attach": [str(card)]})
+        assert same_month["warnings"] == []
+
+        # 적요는 짝 카드 결의의 적요를 우선한다. 많이 쓴 표현을 쓰고, 동률이면 묻는다
+        memos = {approval: [["클라우드 월 사용료", 3], ["클라우드 사용료", 2]]}
+        unified = tax.build_plan(items, context(directory, cardMatches=matched, cardMemos=memos), {"attach": [str(card)]})
+        assert unified["rows"][0]["rmkDc"] == "클라우드 월 사용료" and unified["head"]["docTitle"] == "기타지급수수료_클라우드 월 사용료"
+        assert any("다른 표현" in warning for warning in unified["warnings"]) and unified["issues"] == []
+        tie = {approval: [["A 사용료", 2], ["B 사용료", 2]]}
+        assert any("갈립니다" in issue for issue in tax.build_plan(items, context(directory, cardMatches=matched, cardMemos=tie), {})["issues"])
+        assert tax.build_plan(items, context(directory, cardMatches=matched, cardMemos=tie), {"memo": ["직접"]})["rows"][0]["rmkDc"] == "직접"
+        claimed_memo = tax.build_plan(invoices(directory, receipt="청구"), context(directory, cardMemos=memos), {})
+        assert claimed_memo["rows"][0]["rmkDc"] == "서버 사용료"  # 지급요청은 카드 이력을 쓰지 않는다
         assert plan["head"]["isuDt"] == row["issDt"] == "20260930" and row["payDt"] == "20261012"
         assert (row["cashCd"], row["attrCd"], row["pjtNm"], row["rmkDc"]) == ("0350", "1", "테스트 경비", "서버 사용료")
         assert (row["supAm"], row["vatAm"], row["sumAm"]) == (59790, 5979, 65769)
@@ -191,7 +206,8 @@ def check_plan():
         assert any("공급받는자" in issue for issue in tax.build_plan(stranger, context(directory, cardMatches=matched), {})["issues"])
         assert any("연도" in issue for issue in tax.build_plan(items, context(directory, cardMatches=matched), {"accountingDate": "2027-01-04"})["issues"])
         later = tax.build_plan(items, context(directory, cardMatches=matched), {"accountingDate": "2026-10-31"})
-        assert later["issues"] == [] and any("반려" in warning for warning in later["warnings"])
+        assert later["issues"] == [] and any("작성일자" in warning for warning in later["warnings"])
+        assert later["rows"][0]["issDt"] == "20260930"  # 증빙일자는 항상 작성일자
 
         # 계산서는 계산서 증빙구분, 세액을 합치는 용도는 막는다
         exempt = invoices(directory, type="계산서", vat=0, supply=65769)
@@ -217,6 +233,20 @@ def initial(rows):
                                               for index, row in enumerate(rows, 1)]}}}
     return {"mainhtml": TEMPLATE, "html": "<h1>_DF10_</h1>_DF01__DF02__DF03__DF04_<div>_DF11_</div>",
             "resultMap": {"outProcessForm": {"outBindData": json.dumps(binding)}}}
+
+
+def check_card_memos():
+    def doc(state, *rows):
+        return {"head": {"approState": state}, "detail": [{"trNm": name, "rmkDc": memo, "issDt": day} for name, memo, day in rows]}
+    history = [doc("1", ("구글클라우드코리아", "구글 클라우드 월 사용료", "20260505"), ("Amazon_AWS", "AWS 월 사용료", "20260505")),
+               doc("1", ("구글클라우드코리아", "구글 클라우드 월 사용료 ", "20260705"), ("구글클라우드코리아", "Gemini API 사용료", "20260710")),
+               doc("1", ("구글클라우드코리아", "구글클라우드 사용료", "20260805")),
+               doc("4", ("구글클라우드코리아", "반려된 적요", "20260905"))]
+    found = tax.card_memo_candidates(history, {"구글클라우드코리아"})
+    assert found[0] == ["구글 클라우드 월 사용료", 2] and "반려된 적요" not in json.dumps(found, ensure_ascii=False)
+    assert "AWS 월 사용료" not in json.dumps(found, ensure_ascii=False)
+    assert tax.card_memo_candidates(history, {"없는 가맹점"}) == []
+    print("카드 적요 통일: 승인 이력만·같은 가맹점만·많이 쓴 순 통과")
 
 
 def check_render():
@@ -374,6 +404,7 @@ def check_layout_compat():
 if __name__ == "__main__":
     check_parse()
     check_plan()
+    check_card_memos()
     check_render()
     check_resume()
     check_layout_compat()
