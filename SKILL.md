@@ -370,7 +370,10 @@ python3 "$SKILL_DIR/taxinvoice.py" prepare --pdf '<PDF>' [--attach '<카드 이�
 python3 "$SKILL_DIR/taxinvoice.py" check <plan>    # 저장 전 재검증 (쓰기 없음)
 python3 "$SKILL_DIR/taxinvoice.py" draft <plan>    # 임시보관 + ERP·본문·첨부 재조회
 python3 "$SKILL_DIR/taxinvoice.py" status --verify # 작업 기록 확인
+python3 "$SKILL_DIR/taxinvoice.py" retire <journal> # 사용자가 그룹웨어에서 삭제한 문서의 기록 보관(삭제 확인 후)
 ```
+
+저장 후 검증이 실패하면 문서를 고치지 말고 무엇이 틀렸는지 알린 뒤, 사용자에게 임시보관함에서 삭제를 요청한다. 삭제되면 `retire` → 검토안 새로 생성 → `draft`.
 
 검토안을 고칠 때는 옵션을 바꿔 `prepare`를 **새 `--out`**으로 다시 실행한다.
 

@@ -70,9 +70,9 @@ def check_parse():
 
 
 ACCOUNT = {"companyCode": "1000", "userCode": "E1", "userName": "테스트", "deptCode": "D1", "deptName": "부서"}
-OWN = {"bankCd": "040", "bankNm": "국민", "baNb": "***@!1!@own", "decryptBaNb": "11112222333344",
+OWN = {"bankCd": "040", "bankNm": "국민", "baNb": "**************@!1!@own", "decryptBaNb": "11112222333344",
        "depositorDc": "(주)엠와이소셜컴퍼니"}
-VENDOR = {"bankCd": "088", "bankNm": "신한", "baNb": "***@!1!@vendor", "decryptBaNb": "99998888",
+VENDOR = {"bankCd": "088", "bankNm": "신한", "baNb": "********@!1!@vendor", "decryptBaNb": "99998888",
           "depositorDc": "테스트클라우드코리아(유)"}
 
 
@@ -142,7 +142,10 @@ def check_plan():
         assert plan["head"]["isuDt"] == row["issDt"] == "20260930" and row["payDt"] == "20261012"
         assert (row["cashCd"], row["attrCd"], row["pjtNm"], row["rmkDc"]) == ("0350", "1", "테스트 경비", "서버 사용료")
         assert (row["supAm"], row["vatAm"], row["sumAm"]) == (59790, 5979, 65769)
-        assert row["baNb"] == OWN["baNb"] and plan["accountDigits"] == OWN["decryptBaNb"]
+        # 마스킹된 표시값이 아니라 숫자 계좌번호를 보낸다 (표시값을 보내면 서버가 그 문자열을 저장한다)
+        assert row["baNb"] == OWN["decryptBaNb"] and plan["accountDigits"] == OWN["decryptBaNb"]
+        masked = document("M", "1", "t", decryptBaNb="**************")
+        assert tax.account_precedent([masked], "recognition", "x", "주식회사 엠와이소셜컴퍼니") is None
         assert plan["body"]["withdraw"] == [] and "10월 2일 결제" in plan["body"]["notes"][0]
         assert "구글" not in json.dumps(plan["body"], ensure_ascii=False)
         assert [Path(item["path"]).name for item in plan["attachments"]] == ["invoice0.pdf", "card.pdf"]
@@ -165,7 +168,7 @@ def check_plan():
         other = [{**items[0], "supplier": "새거래처 주식회사"}]
         fresh = tax.build_plan(other, context(directory, cardMatches=matched), {})
         assert any("제목" in issue for issue in fresh["issues"]) and any("적요" in issue for issue in fresh["issues"])
-        assert fresh["rows"][0]["baNb"] == OWN["baNb"]
+        assert fresh["rows"][0]["baNb"] == OWN["decryptBaNb"]
         named = tax.build_plan(other, context(directory, cardMatches=matched), {"title": "기타지급수수료_새 서비스", "memo": ["새 서비스 사용료"]})
         assert named["issues"] == [] and any("새로 정해야" in warning for warning in named["warnings"])
 
@@ -181,7 +184,7 @@ def check_plan():
         paid_before = context(directory, documents=[document("A", "1", "기타지급수수료_서버 사용료"),
                                                     document("B", "1", "기타지급수수료_서버 사용료", **VENDOR)])
         payment = tax.build_plan(claimed, paid_before, {"withdraw": ["MYSC 운영비 계좌"]})
-        assert payment["issues"] == [] and payment["rows"][0]["baNb"] == VENDOR["baNb"]
+        assert payment["issues"] == [] and payment["rows"][0]["baNb"] == VENDOR["decryptBaNb"]
         assert payment["body"]["withdraw"] == ["MYSC 운영비 계좌"] and "지급을 요청" in payment["body"]["notes"][0]
 
         # 영수·청구가 섞이거나 표시가 없으면 방식을 묻는다

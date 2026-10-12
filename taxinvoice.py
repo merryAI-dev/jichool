@@ -180,11 +180,13 @@ def vendor_precedent(documents, supplier):
 
 
 def account_precedent(documents, mode, supplier, company):
-    """수취 계좌는 직접 입력하지 않고 승인된 이전 행의 계좌를 그대로 쓴다.
-    인식용은 회사 자신의 계좌, 지급요청은 같은 거래처의 계좌만 허용한다."""
+    """수취 계좌는 직접 입력하지 않고 승인된 이전 행의 계좌번호를 재사용한다.
+    인식용은 회사 자신의 계좌, 지급요청은 같은 거래처의 계좌만 허용한다.
+    조회 응답의 baNb는 마스킹·암호화된 표시값이라 그대로 보내면 서버가 그 문자열을 계좌로 저장한다.
+    반드시 복호화된 숫자(decryptBaNb)를 보낸다."""
     for entry in reversed(approved_rows(documents)):
         row = entry["row"]
-        if not (row.get("bankCd") and row.get("baNb") and row.get("depositorDc")):
+        if not (row.get("bankCd") and plain_account(row.get("decryptBaNb")) and row.get("depositorDc")):
             continue
         own = same_party(row["depositorDc"], company)
         if mode == "recognition" and own:
@@ -192,6 +194,11 @@ def account_precedent(documents, mode, supplier, company):
         if mode == "payment" and not own and same_party(row.get("trNm"), supplier):
             return entry
     return None
+
+
+def plain_account(value):
+    value = str(value or "")
+    return value if re.fullmatch(r"\d{6,20}", value) else ""
 
 
 def card_matches(client, card_name, invoice, today):
@@ -335,7 +342,7 @@ def build_plan(invoices, context, options):
                "empCd": account["userCode"], "empNm": account["userName"],
                "deptCd": account["deptCode"], "deptNm": account["deptName"],
                "bankCd": bank.get("bankCd") or "", "bankNm": bank.get("bankNm") or "",
-               "baNb": bank.get("baNb") or "", "depositorDc": bank.get("depositorDc") or "",
+               "baNb": plain_account(bank.get("decryptBaNb")), "depositorDc": bank.get("depositorDc") or "",
                "realDepositorDc": "", "realDepositorFg": "",
                "cashCd": options.get("purpose") or previous.get("cashCd") or DEFAULT_CASH, "cashNm": "",
                "rmkDc": (memo or "").strip(), "pjtCd": options.get("project") or previous.get("pjtCd") or context.get("defaultProject", ""),
@@ -459,6 +466,8 @@ def validate(client, plan):
         raise ExpenseError("검토 파일과 현재 로그인 계정이 다릅니다.")
     if plan["issues"]:
         raise ExpenseError("확인할 항목이 남았습니다:\n" + "\n".join(plan["issues"]))
+    if any(not plain_account(row["baNb"]) for row in plan["rows"]):
+        raise ExpenseError("수취 계좌번호가 숫자가 아닙니다(마스킹된 표시값). 검토안을 다시 만드세요.")
     if any(row["issDt"] != invoice["issued"] for row, invoice in zip(plan["rows"], plan["invoices"])):
         raise ExpenseError("증빙일자는 세금계산서 작성일자여야 합니다(재경팀 반려 사유).")
     for invoice in plan["invoices"]:
@@ -691,6 +700,31 @@ def draft(args):
         print(f"임시보관 및 첨부 검증 완료: 문서 {journal['docId']} / {plan['head']['docTitle']}")
 
 
+def retire_command(args):
+    """사용자가 그룹웨어에서 삭제한 문서의 작업 기록을 보관 폴더로 옮긴다. 서버에서 삭제(-3)가 확인될 때만."""
+    client = Client()
+    path = Path(args.journal).expanduser().resolve()
+    if path.parent != DRAFTS.resolve():
+        raise ExpenseError("세금계산서 작업 기록 폴더 안의 JSON을 지정하세요.")
+    with (DRAFTS / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        journal = read_private(path)
+        head = journal["plan"]["head"]
+        if str(head["coCd"]) != str(client.erp["companyCode"]) or str(head["empCd"]) != str(client.erp["userCode"]):
+            raise ExpenseError("다른 사용자 작업 기록입니다.")
+        if journal.get("linkKey"):
+            heads = client.post(API + "0ap00002", {"linkKey": journal["linkKey"]})
+            states = {str(item.get("approState")) for item in heads}
+            if states and states != {"-3"}:
+                raise ExpenseError(f"서버 문서가 아직 남아 있습니다(상태 {', '.join(sorted(states))}). 그룹웨어에서 먼저 삭제하세요.")
+        elif journal["status"] not in ("prepared", "pdf_uploaded"):
+            raise ExpenseError("연결키 없이 쓰기를 시도한 기록입니다. 그룹웨어에서 직접 확인하세요.")
+        target = DRAFTS / "retired" / f"{path.stem}-doc{journal.get('docId') or 'none'}.json"
+        target.parent.mkdir(mode=0o700, exist_ok=True)
+        path.rename(target)
+        print(f"삭제 확인 후 보관: {target}")
+
+
 def status_command(args):
     client = Client()
     results = []
@@ -743,6 +777,9 @@ def main():
     command = commands.add_parser("draft", help="1210 지출결의를 임시보관하고 ERP·본문·첨부를 재조회")
     command.add_argument("plan")
     command.set_defaults(run=draft)
+    command = commands.add_parser("retire", help="그룹웨어에서 삭제한 문서의 작업 기록을 보관 (삭제 확인 후)")
+    command.add_argument("journal")
+    command.set_defaults(run=retire_command)
     command = commands.add_parser("status", help="세금계산서 작업 기록과 저장 상태")
     command.add_argument("--verify", action="store_true")
     command.set_defaults(run=status_command)
