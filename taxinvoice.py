@@ -596,6 +596,7 @@ def continue_draft(client, journal, path, validate_plan=None, verify=None):
     """확인된 단계는 건너뛰고, 결과가 불명확한 쓰기는 재전송하지 않는다.
     같은 1210 양식을 쓰는 전문가 활용비(expertfee.py)는 검증 함수만 바꿔 끼운다."""
     validate_plan = validate_plan or validate
+    form_id = str(journal["plan"].get("formId") or FORM_ID)   # 전문가 활용비 원천세 이체는 1212
     def save(status=None):
         if status:
             journal["status"] = status
@@ -614,7 +615,7 @@ def continue_draft(client, journal, path, validate_plan=None, verify=None):
     form = plan["source"]["form"]
     if journal["status"] == "prepared":
         validate_plan(client, plan)
-        initial = ex.eap_init(client, FORM_ID)
+        initial = ex.eap_init(client, form_id)
         if initial["resultMap"].get("appdocinfo") or len(initial["resultMap"]["docnumtype"]) != 1:
             raise ExpenseError("신규 전자결재 양식 초기화를 확인할 수 없습니다.")
         journal["attachments"] = []
@@ -654,10 +655,10 @@ def continue_draft(client, journal, path, validate_plan=None, verify=None):
         save("erp_attempted")
         client.post(API + "0ap01001", {"consList": [], "head": head, "detail": detail, "budgetList": None})
         save("erp_saved")
-    initial = ex.eap_init(client, FORM_ID, journal["approKey"])
+    initial = ex.eap_init(client, form_id, journal["approKey"])
     contents = render(initial, client.uc, plan, dt.datetime.now(KST).strftime("%Y-%m-%d"))
     payload = ex.eap_draft_payload(initial, client, plan, journal["approKey"], contents,
-                                   journal.get("attachments", []), form_id=FORM_ID)
+                                   journal.get("attachments", []), form_id=form_id)
     save("eap_attempted")
     try:
         result = client.post("/eap/eap110A06", payload)

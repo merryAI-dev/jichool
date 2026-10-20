@@ -1082,8 +1082,8 @@ def eap_draft_payload(initial, client, plan, appro_key, contents, attachments=()
     if data.get("appdocinfo") or len(data["docnumtype"]) != 1 or not data["hidAppDocLine"]:
         raise ExpenseError("신규 전자결재 기본 설정을 확인할 수 없습니다.")
     uc, form = client.uc, data["form_info"]
-    if str(form["form_id"]) != str(form_id) or str(form_id) not in ("1211", "1210") or str(data["outProcessInfo"]["contents_tp"]) != "3":
-        raise ExpenseError("검증한 지출결의 양식(1211 법인카드, 1210 세금계산서)만 임시저장할 수 있습니다.")
+    if str(form["form_id"]) != str(form_id) or str(form_id) not in ("1211", "1210", "1212") or str(data["outProcessInfo"]["contents_tp"]) != "3":
+        raise ExpenseError("검증한 지출결의 양식(1211 법인카드, 1210 세금계산서·전문가 활용비, 1212 원천세 자금이체)만 임시저장할 수 있습니다.")
     params = {"doc_id": 0, "form_id": int(form["form_id"]), "numbering_id": data["docnumtype"][0]["cd_val"],
               "rep_dt": None, "repdt_mod_yn": "0", "co_id": uc["compSeq"], "dept_id": uc["deptSeq"],
               "biz_id": uc["bizSeq"], "user_id": uc["empSeq"], "co_nm": uc["compName"],

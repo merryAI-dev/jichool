@@ -62,7 +62,7 @@ def spec_for(folder, **overrides):
              "documents": {"confirmation": str(folder / "confirm.pdf"), "idCard": str(folder / "id.jpg"), "bankbook": str(folder / "bank.pdf")}}
     spec = {"program": "2026테스트사업", "purpose": "1:1 자문비", "memoTemplate": "{program}_{purpose}({name})",
             "project": "PP0001", "accountingDate": "20261020", "funding": "operating", "payees": [payee],
-            "memoConfirmed": True, "projectConfirmed": True}
+            "memoConfirmed": True, "projectConfirmed": True, "titleConfirmed": True}
     spec.update(overrides)
     return spec
 
@@ -76,13 +76,14 @@ def check_plan(folder):
     assert plan["transfer"]["required"] is False and "운영비" in plan["body"]["notes"][0]
     assert plan["payments"][0]["account"] == "87791005057207" and plan["totals"]["tax"] == 52800
 
-    two = spec_for(folder, funding="project", projectAccount="신한 26 테스트 130549")
+    two = spec_for(folder, funding="project", projectAccount="신한 26 테스트 130549 계좌")
     second = dict(two["payees"][0], name="김철수", holder="김철수", incomeType="business", gross=300000)
     two["payees"].append(second)
     plan = ef.build_plan(two, folder)
     assert plan["head"]["title"] == "2026테스트사업_1:1 자문비(홍길동 외 1인)"
     assert [r["amount"] for r in plan["transfer"]["rows"]] == [52800, 9900] and plan["transfer"]["total"] == 62700
-    assert "원천세(사업소득) 이체" in plan["transfer"]["rows"][1]["memo"]
+    assert plan["transfer"]["rows"][1]["memo"] == "자금이체_신한 26 테스트 130549 계좌 -> 국민 운영비 계좌_1:1 자문비 원천세 이체(김철수)"
+    assert plan["transfer"]["title"].endswith("원천세 이체(홍길동, 김철수)")
     assert [a["name"][:3] for a in plan["attachments"]] == ["1. ", "2. ", "3. ", "4. ", "5. ", "6. "]
 
     bad = spec_for(folder)
@@ -213,6 +214,63 @@ def check_real_world(folder):
     print("실전: 합본 서류·영문 파일명(alias)·견적서/사업자등록증·법인 차단(테스트 예외)·확인서 생략 확인·행별 프로젝트·사람별 적요 통과")
 
 
+def check_titles(folder):
+    """제목은 실제 사례를 그대로 재현해야 한다: 5019(한 명=적요), 4446(공통 용도·외 N인), 1509(총N인), 4112(1212)."""
+    one = {"program": "2026인베스트경기", "purpose": "1:1 자문비", "memoTemplate": "{program}_{purpose}({name})"}
+    assert ef.title_for(one, [{"name": "안동옥"}]) == "2026인베스트경기_1:1 자문비(안동옥)"
+    fintech = {"program": "2026핀테크", "purpose": "해외 데모데이(Singapore) 심사비", "memoTemplate": "{program}_{purpose}({name})",
+               "projectAccount": "국민 2026핀테크 236243"}
+    people = [{"name": n, "purpose": f"해외 데모데이(Singapore) {k} 심사비"} for n, k in
+              (("김승현", "서류"), ("김현준", "서류"), ("정재혁", "서류"), ("김소중", "발표"), ("홍준기", "발표"))]
+    assert ef.title_for(fintech, people) == "2026핀테크_해외 데모데이(Singapore) 심사비(김승현 외 4인)"
+    assert ef.memo_for(fintech, people[3]) == "2026핀테크_해외 데모데이(Singapore) 발표 심사비(김소중)"
+    assert ef.transfer_title(fintech, [p["name"] for p in people], "해외 데모데이(Singapore) 심사비") == (
+        "자금이체_국민 2026핀테크 236243 -> 국민 운영비 계좌_해외 데모데이(Singapore) 심사비 원천세 이체(김승현, 김현준, 정재혁, 김소중, 홍준기)")
+    old = {"program": "25경기 사경 창도패", "purpose": "대면심사 심사비", "titleStyle": "total"}
+    assert ef.title_for(old, [{"name": n} for n in "가나다라"]) == "25경기 사경 창도패_대면심사 심사비_(총4인)"
+    assert ef.common_purpose(["오피스아워", "연사비"]) is None
+    # 제목 확인 관문·사업이 섞인 문서 차단
+    unconfirmed = spec_for(folder, titleConfirmed=False)
+    assert any("titleConfirmed" in i and "제목 '" in i for i in ef.build_plan(unconfirmed, folder)["issues"])
+    mixed = spec_for(folder)
+    other = dict(mixed["payees"][0], name="김철수", holder="김철수", project="PP0002")
+    mixed["payees"].append(other)
+    assert any("사업별로 문서를 나누세요" in i for i in ef.build_plan(mixed, folder)["issues"])
+    print("제목: 5019·4446·1509·4112 실제 제목 재현, 공통 용도, 제목 확인 관문, 사업 섞임 차단 통과")
+
+
+def check_transfer(folder):
+    """1212 원천세 이체(실제 4112·5649 규칙, 테스트 임시보관 128786 재조회 값): 사람마다 한 행, 0360 보통예금,
+    증빙 기타, 수취 = 국민 운영비 계좌 (주)엠와이소셜컴퍼니, 첨부 = 0. 원천세 계산 + N-1. 비용지급확인서."""
+    spec = spec_for(folder, funding="project", projectAccount="국민 2026핀테크 236243", transferConfirmed=False)
+    second = dict(spec["payees"][0], name="김철수", holder="김철수", incomeType="business", gross=400000)
+    third = dict(spec["payees"][0], name="박영희", holder="박영희", gross=120000)        # 과세최저한 → 원천세 0원, 1212 행 없음
+    spec["payees"] += [second, third]
+    plan = ef.build_plan(spec, folder)
+    sub = plan["transfer"]["plan"]
+    assert any("transferConfirmed" in i for i in sub["issues"])
+    spec["transferConfirmed"] = True
+    sub = ef.build_plan(spec, folder)["transfer"]["plan"]
+    assert not sub["issues"] and [p["name"] for p in sub["payments"]] == ["홍길동", "김철수"]
+    assert [p["amount"] for p in sub["payments"]] == [52800, 13200]
+    assert [a["name"] for a in sub["attachments"]] == ["0. 원천세 계산", "1-1. 비용지급확인서(홍길동)", "2-1. 비용지급확인서(김철수)"]
+    assert Path(sub["attachments"][0]["path"]).read_bytes().startswith(b"%PDF-")
+    assert sub["head"]["title"] == "자금이체_국민 2026핀테크 236243 -> 국민 운영비 계좌_1:1 자문비 원천세 이체(홍길동, 김철수)"
+    assert sub["body"]["withdraw"] == ["국민 2026핀테크 236243"]
+    context = {"today": "20261020", "account": {"companyCode": "1000", "userCode": "E1", "userName": "테스트", "deptCode": "D1", "deptName": "팀"},
+               "division": {"divCd": "1000", "divNm": "테스트회사"}, "transferForm": {"formId": "1212"}, "gisu": {"gisu": 2},
+               "dateRules": [], "transferCashTypes": [{"typeCd": "0360"}], "projects": [{"pjtCd": "PP0001", "pjtNm": "A_테스트"}]}
+    ef.ex.row_issues = lambda row, snapshot: []
+    sub = ef.erp_transfer(sub, context)
+    row = sub["rows"][0]
+    assert (row["cashCd"], row["attrCd"], row["trNm"], row["bankCd"], row["baNb"], row["depositorDc"], row["formId"]) == (
+        "0360", "9", "", "040", "80173704008641", "(주)엠와이소셜컴퍼니", 1212)
+    assert (row["sumAm"], row["vatAm"]) == (52800, 0) and sub["head"]["docTitle"] == sub["head"]["title"]
+    operating = ef.build_plan(spec_for(folder), folder)
+    assert operating["transfer"]["plan"] is None and operating["transfer"]["required"] is False
+    print("1212: 확인 관문·원천세 있는 사람만·첨부(계산표+확인서)·제목·0360/기타/운영비 계좌 행·운영비 지급이면 없음 통과")
+
+
 if __name__ == "__main__":
     check_withholding()
     check_confirmation()
@@ -223,3 +281,5 @@ if __name__ == "__main__":
         check_erp_rows(folder)
         check_scan(folder)
         check_real_world(folder)
+        check_titles(folder)
+        check_transfer(folder)

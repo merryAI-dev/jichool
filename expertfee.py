@@ -38,6 +38,11 @@ DOCUMENTS = (("confirmation", "비용지급확인서"), ("idCard", "신분증 �
 OPERATING_NOTE = "본 사업({program})은 사업비 전용 계좌 없이, 운영비 계좌를 사용하고 있어 운영비 계좌에서 출금 요청드립니다."
 EVIDENCE_OTHER = "9"   # 공통코드 A-11 증빙구분: 9 = 기타 (1=세금계산서, 2=계산서, 8=법인카드 …)
 DRAFTS = CONFIG / "expert-drafts"
+# 원천세를 모으는 회사 운영비 계좌. 근거: 사업비 관리 시트 머리말 "[지출결의 시 참고] MYSC 운영비 계좌",
+# 실제 1212 문서(MYSC-2026-4112 등)의 수취 계좌 801…641·예금주 (주)엠와이소셜컴퍼니와 일치.
+OPERATING = {"bankCd": "040", "bankNm": "국민", "account": "80173704008641", "holder": "(주)엠와이소셜컴퍼니"}
+TRANSFER_CASH = "0360"   # 1212 양식 용도: 보통예금
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 FILES = CONFIG / "state" / "expertfee-files"
 
 
@@ -272,13 +277,45 @@ def memo_for(spec, payee):
     return template.format(program=spec["program"], purpose=payee.get("purpose") or spec["purpose"], name=payee["name"])
 
 
+def common_purpose(purposes):
+    """사람별 용도의 공통 부분. '해외 데모데이(Singapore) 서류 심사비'·'… 발표 심사비' → '해외 데모데이(Singapore) 심사비'.
+    앞쪽 공통 단어 + 뒤쪽 공통 단어. 공통이 없으면 None(사람에게 묻는다)."""
+    words = [str(p or "").split() for p in purposes]
+    if not words or not all(words):
+        return None
+    if all(w == words[0] for w in words):
+        return " ".join(words[0])
+    head = []
+    for group in zip(*words):
+        if len(set(group)) != 1:
+            break
+        head.append(group[0])
+    tail = []
+    for group in zip(*(list(reversed(w)) for w in words)):
+        if len(set(group)) != 1 or len(head) + len(tail) >= min(map(len, words)):
+            break
+        tail.append(group[0])
+    joined = head + list(reversed(tail))
+    return " ".join(joined) or None
+
+
 def title_for(spec, payees):
-    """한 명: 적요와 같다. 여러 명: '프로그램_용도(첫 사람 외 N인)' (MYSC-2026-4446 형식)."""
+    """제목 규칙(실제 사례): 한 명이면 적요와 같다(5019·4940). 여러 명이면 '사업_공통 용도(첫 사람 외 N인)'(4446).
+    spec.titleStyle이 'total'이면 2025 형식 '사업_공통 용도_(총N인)'(1509)."""
     if spec.get("title"):
         return spec["title"]
     if len(payees) == 1:
         return memo_for(spec, payees[0])
-    return f"{spec['program']}_{spec['purpose']}({payees[0]['name']} 외 {len(payees) - 1}인)"
+    purpose = common_purpose([payee.get("purpose") or spec.get("purpose") for payee in payees]) or spec.get("purpose")
+    if spec.get("titleStyle") == "total":
+        return f"{spec['program']}_{purpose}_(총{len(payees)}인)"
+    return f"{spec['program']}_{purpose}({payees[0]['name']} 외 {len(payees) - 1}인)"
+
+
+def transfer_title(spec, names, purpose):
+    """1212 원천세 이체 제목(4112·5649·5337): '자금이체_{출금 계좌} -> 국민 운영비 계좌_{용도} 원천세 이체(이름, …)'."""
+    who = names[0] if len(names) == 1 else (", ".join(names) if len(names) <= 5 else f"{len(names)}인")
+    return f"자금이체_{spec.get('projectAccount') or '<사업 계좌>'} -> 국민 운영비 계좌_{purpose} 원천세 이체({who})"
 
 
 def attachments_for(spec, payees, workdir):
@@ -397,17 +434,27 @@ def build_plan(spec, workdir):
                      "holder": payee.get("holder"), "accountDisplay": payee.get("accountDisplay") or payee.get("account"),
                      "evidence": "기타", "evidenceDate": spec.get("accountingDate")})
         if funding == "project" and tax["tax"]:
-            transfers.append({"name": payee["name"], "amount": tax["tax"],
-                              "memo": f"자금이체_{spec.get('projectAccount') or '<사업 계좌>'} 계좌 -> 국민 운영비 계좌_{memo} 원천세({INCOME[income_type]['label']}) 이체"})
+            purpose = payee.get("purpose") or spec.get("purpose")
+            transfers.append({"name": payee["name"], "amount": tax["tax"], "incomeType": income_type,
+                              "memo": transfer_title(spec, [payee["name"]], purpose)})
     # 적요·제목·프로젝트는 과거 사례로 초안을 쓰고 사람에게 보여준 뒤에만 저장한다.
     if not spec.get("memoConfirmed"):
         issues.append("적요·제목 초안을 사용자에게 보여주고 확인받은 뒤 memoConfirmed: true로 표시하세요.")
     if not spec.get("project") and not all(payee.get("project") for payee in payees):
         issues.append("project 확인 필요 (문서 공통 또는 사람별)")
+    title = title_for(spec, payees) if spec.get("program") and payees else ""
+    if not spec.get("titleConfirmed"):
+        issues.append(f"제목 '{title}'을 사용자에게 따로 보여주고 확인받은 뒤 titleConfirmed: true로 표시하세요.")
+    if spec.get("program") and title and not title.startswith(str(spec["program"])):
+        warnings.append(f"제목이 사업명({spec['program']})으로 시작하지 않습니다. 실제 결의 제목은 모두 사업명으로 시작합니다.")
+    programs = {payee.get("program") or spec.get("program") for payee in payees}
+    projects = {payee.get("project") or spec.get("project") for payee in payees}
+    if len(programs) > 1 or len(projects) > 1:
+        issues.append("사업(프로젝트)이 다른 사람이 한 문서에 섞였습니다. 제목을 규칙대로 만들 수 없으니 사업별로 문서를 나누세요.")
     if not spec.get("projectConfirmed"):
         issues.append("프로젝트를 사용자에게 확인받은 뒤 projectConfirmed: true로 표시하세요.")
     if funding == "project" and not spec.get("projectAccount"):
-        issues.append("사업 전용 계좌 이름(projectAccount)이 필요합니다. 예: 신한 25 중서원 130549")
+        issues.append("사업 전용 계좌 표기(projectAccount)가 필요합니다. 과거 1212 제목과 같은 표기로. 예: '국민 2026핀테크 236243', '신한 25 중서원 130549 계좌'")
     notes = spec.get("notes") or ([OPERATING_NOTE.format(program=spec.get("program"))] if funding == "operating" else ["-"])
     withdraw = spec.get("withdraw") or (["국민 운영비 계좌"] if funding == "operating" else [spec.get("projectAccount") or ""])
     plan = {
@@ -416,13 +463,101 @@ def build_plan(spec, workdir):
                  "payDate": spec.get("payDate")},
         "payments": payments, "body": {"withdraw": withdraw, "notes": notes},
         "attachments": attachments_for(spec, payees, workdir),
-        "transfer": {"formId": TRANSFER_FORM_ID, "required": bool(transfers), "rows": transfers,
-                     "total": sum(item["amount"] for item in transfers)} if funding == "project" else {"required": False,
+        "transfer": {"formId": TRANSFER_FORM_ID, "required": bool(transfers), "rows": transfers, "plan": None,
+                     "title": transfer_title(spec, [r["name"] for r in transfers],
+                                             common_purpose([p.get("purpose") or spec.get("purpose") for p in payees if p.get("name") in {r["name"] for r in transfers}]) or spec.get("purpose")) if transfers else None,
+                     "total": sum(item["amount"] for item in transfers)} if funding == "project" else {"required": False, "plan": None,
                      "reason": "운영비 계좌에서 바로 지급해 원천세 이체 문서가 필요 없습니다."},
         "totals": {"gross": sum(r["gross"] for r in payments), "tax": sum(r["tax"] for r in payments), "net": sum(r["net"] for r in payments)},
         "issues": issues, "warnings": warnings,
     }
+    if plan["transfer"].get("required"):
+        plan["transfer"]["plan"] = build_transfer(spec, plan, workdir)
     return plan
+
+
+def tax_calc_pdf(spec, payments, target):
+    """첨부 '0. 원천세 계산': 사람별 총지급액·소득유형·소득세·지방소득세·원천세·실지급액 표. Chrome으로 PDF 인쇄."""
+    import html as _html
+    rows = "".join(
+        f"<tr><td>{i}</td><td>{_html.escape(p['name'])}</td><td>{INCOME[p['incomeType']]['label']} {INCOME[p['incomeType']]['rate']}</td>"
+        f"<td>{p['gross']:,}</td><td>{p['incomeTax']:,}</td><td>{p['localTax']:,}</td><td><b>{p['tax']:,}</b></td><td>{p['net']:,}</td></tr>"
+        for i, p in enumerate(payments, 1))
+    total = {k: sum(p[k] for p in payments) for k in ("gross", "incomeTax", "localTax", "tax", "net")}
+    page = f"""<!doctype html><meta charset="utf-8"><style>
+body{{font-family:'Apple SD Gothic Neo',sans-serif;margin:32px;font-size:12px}} h1{{font-size:16px}}
+table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #999;padding:6px 8px;text-align:right}}
+td:nth-child(2),td:nth-child(3),th{{text-align:center}} tfoot td{{font-weight:bold;background:#f3f3f3}}
+p{{color:#444;line-height:1.6}}</style>
+<h1>원천세 계산 — {_html.escape(spec.get('program') or '')} {_html.escape(spec.get('purpose') or '')}</h1>
+<p>회계일 {spec.get('accountingDate') or ''} · 출금 {_html.escape(spec.get('projectAccount') or '')} → 국민 운영비 계좌</p>
+<table><thead><tr><th>No</th><th>성명</th><th>소득구분</th><th>총지급액</th><th>소득세</th><th>지방소득세</th><th>원천세 합계</th><th>실지급액</th></tr></thead>
+<tbody>{rows}</tbody><tfoot><tr><td colspan="3">합계</td><td>{total['gross']:,}</td><td>{total['incomeTax']:,}</td>
+<td>{total['localTax']:,}</td><td>{total['tax']:,}</td><td>{total['net']:,}</td></tr></tfoot></table>
+<p>기타소득: 필요경비 60% 공제 후 소득세 20%, 지방소득세 = 소득세의 10% (소득금액 5만원 이하 과세최저한).<br>
+사업소득: 소득세 3%, 지방소득세 = 소득세의 10% (소득세 1,000원 미만 소액부징수). 10원 미만 절사.</p>"""
+    source = Path(target).with_suffix(".html")
+    source.write_text(page, encoding="utf-8")
+    try:
+        subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                        f"--print-to-pdf={target}", source.as_uri()], capture_output=True, check=True, timeout=60)
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise ExpenseError("원천세 계산표 PDF를 만들지 못했습니다(Chrome 필요).") from None
+    finally:
+        source.unlink(missing_ok=True)
+    if not Path(target).exists() or not Path(target).read_bytes().startswith(b"%PDF-"):
+        raise ExpenseError("원천세 계산표 PDF를 만들지 못했습니다.")
+    Path(target).chmod(0o600)
+    return Path(target)
+
+
+def build_transfer(spec, plan, workdir):
+    """1212 원천세 자금이체 검토안(사업 전용 계좌에서 지급할 때만). 1210 검토안과 같은 모양이라 같은 저장 흐름을 쓴다.
+    사람마다 한 행(원천세 0원인 사람은 없음), 계정 0360 보통예금, 수취 = 운영비 계좌, 첨부 = 원천세 계산 + 비용지급확인서."""
+    taxed = [p for p in plan["payments"] if p["tax"]]
+    if spec.get("funding") != "project" or not taxed:
+        return None
+    issues, warnings = [], []
+    if not spec.get("transferConfirmed"):
+        issues.append("원천세 이체(1212)를 함께 올릴지 사용자에게 묻고, 올리기로 하면 transferConfirmed: true로 표시하세요.")
+    folder = Path(workdir) / secrets.token_hex(6)
+    folder.mkdir(mode=0o700, parents=True)
+    calc = tax_calc_pdf(spec, taxed, folder / "0. 원천세 계산.pdf")
+    raw = calc.read_bytes()
+    attachments = [{"name": "0. 원천세 계산", "path": str(calc), "source": "generated",
+                    "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}]
+    payees = {p["name"]: p for p in spec.get("payees") or []}
+    for index, payment in enumerate(taxed, 1):
+        source = (payees.get(payment["name"], {}).get("documents") or {}).get("confirmation")
+        if not source:
+            warnings.append(f"{payment['name']}: 비용지급확인서가 없어 원천세 이체 첨부에서 빠집니다.")
+            continue
+        target = folder / f"{index}-1. 비용지급확인서({payment['name']}).pdf"
+        shutil.copyfile(Path(source).expanduser(), target)
+        target.chmod(0o600)
+        data = target.read_bytes()
+        attachments.append({"name": target.stem, "path": str(target), "source": str(source),
+                            "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+    purpose = common_purpose([p.get("purpose") for p in taxed]) or spec.get("purpose")
+    return {"schema": 1, "kind": "expertfee-transfer", "formId": TRANSFER_FORM_ID,
+            "head": {"title": spec.get("transferTitle") or transfer_title(spec, [p["name"] for p in taxed], purpose),
+                     "accountingDate": spec.get("accountingDate"), "project": spec.get("project"), "payDate": spec.get("payDate")},
+            "payments": [{"name": p["name"], "amount": p["tax"], "incomeType": p["incomeType"], "project": p.get("project"),
+                          "memo": transfer_title(spec, [p["name"]], p.get("purpose") or spec.get("purpose"))} for p in taxed],
+            "body": {"withdraw": [spec.get("projectAccount") or ""], "notes": spec.get("transferNotes") or ["-"]},
+            "attachments": attachments, "totals": {"tax": sum(p["tax"] for p in taxed)},
+            "issues": issues + [i for i in plan["issues"] if "사업 전용 계좌" in i], "warnings": warnings}
+
+
+def transfer_summary(transfer):
+    sub = transfer.get("plan")
+    if not sub:
+        return {"필요": transfer.get("required", False), "이유": transfer.get("reason")}
+    return {"필요": True, "제목": sub["head"]["title"],
+            "행": [{"대상": p["name"], "원천세": p["amount"], "적요": p["memo"]} for p in sub["payments"]],
+            "합계": sub["totals"]["tax"], "수취": f"{OPERATING['bankNm']} {OPERATING['account']} {OPERATING['holder']} (운영비 계좌)",
+            "출금계좌": sub["body"]["withdraw"], "첨부": [a["name"] for a in sub["attachments"]],
+            "확인필요": sub["issues"], "참고": sub["warnings"]}
 
 
 def summary(plan):
@@ -434,7 +569,7 @@ def summary(plan):
                "수취(통장 사본 기준)": f"{r['bank']} {r['accountDisplay']} {r['holder']}"} for r in plan["payments"]],
         "합계": plan["totals"], "출금계좌": plan["body"]["withdraw"], "비고": plan["body"]["notes"],
         "첨부": [item["name"] for item in plan["attachments"]],
-        "원천세 이체(1212)": plan["transfer"],
+        "원천세 이체(1212)": transfer_summary(plan["transfer"]),
         "확인필요": plan["issues"], "참고": plan["warnings"],
     }
 
@@ -473,7 +608,11 @@ def gather(client, spec):
                 "helpTy": "ACASHCD_TYPE_CODE", "langkind": "KOR", "multiCode": [int(FORM_ID)]}),
             "projects": client.codepicker("SPJT_CODE_AUTH", empCd=client.erp["userCode"], useYn="ALL"),
             "banks": client.codepicker("SBANK_CODE", searchText=""),
-            "documents": tx.tax_documents(client, since, today)}
+            "documents": tx.tax_documents(client, since, today),
+            **({"transferForm": tx.form_record(client, TRANSFER_FORM_ID),
+                "transferCashTypes": client.post("/personal/APCodePicker/ApAcashcdTypeCode", {
+                    "helpTy": "ACASHCD_TYPE_CODE", "langkind": "KOR", "multiCode": [int(TRANSFER_FORM_ID)]})}
+               if spec.get("funding") == "project" else {})}
 
 
 def erp_plan(plan, context):
@@ -529,10 +668,52 @@ def erp_plan(plan, context):
     return plan
 
 
+def erp_transfer(sub, context):
+    """1212 원천세 이체 ERP 행: 0360 보통예금, 증빙 9(기타), 거래처 없음, 수취 = 운영비 계좌."""
+    account = context["account"]
+    accounting = date_value(sub["head"]["accountingDate"] or context["today"])
+    usable = {str(item["typeCd"]) for item in context["transferCashTypes"]}
+    if TRANSFER_CASH not in usable:
+        sub["issues"].append("1212 양식에서 보통예금(0360) 용도를 쓸 수 없습니다.")
+    snapshot = {"dateRules": context["dateRules"], "accountingDate": accounting,
+                "cashTypes": context["transferCashTypes"], "projects": context["projects"]}
+    rows = []
+    for index, payment in enumerate(sub["payments"], 1):
+        wanted = payment.get("project") or sub["head"]["project"]
+        project = project_code(context["projects"], wanted)
+        if not project:
+            sub["issues"].append(f"{index}행: 프로젝트 '{wanted}'를 하나로 찾지 못했습니다.")
+        row = {"coCd": account["companyCode"], "cardDt": "", "cardSq": 0, "sunginNb": "", "vatGroupDc": "",
+               "cardCd": "", "cardNm": "", "cardTrCd": "", "cardFg": "",
+               "issDt": accounting, "sumAm": payment["amount"], "vatAm": 0, "supAm": payment["amount"],
+               "trCd": "", "trNm": "", "regNb": "",
+               "empCd": account["userCode"], "empNm": account["userName"],
+               "deptCd": account["deptCode"], "deptNm": account["deptName"],
+               "bankCd": OPERATING["bankCd"], "bankNm": OPERATING["bankNm"], "baNb": OPERATING["account"],
+               "depositorDc": OPERATING["holder"], "realDepositorDc": "", "realDepositorFg": "",
+               "cashCd": TRANSFER_CASH, "cashNm": "", "rmkDc": payment["memo"],
+               "pjtCd": (project or {}).get("pjtCd", ""), "pjtNm": "", "carCd": "", "carNb": "",
+               "issNo": "", "issSq": 0, "cashDt": "", "cashSq": None, "taxTy": "",
+               "payDt": date_value(sub["head"].get("payDate") or context["today"]),
+               "fileGroup": "0", "fileDc": "", "fileInfoList": [], "budgetSts": "0",
+               "formId": int(TRANSFER_FORM_ID), "linkKey": "", "attrCd": EVIDENCE_OTHER}
+        sub["issues"].extend(f"{index}행: {message}" for message in ex.row_issues(row, snapshot))
+        rows.append(row)
+    sub["head"] = {**sub["head"], "coCd": account["companyCode"], "empCd": account["userCode"], "empNm": account["userName"],
+                   "deptCd": account["deptCode"], "deptNm": account["deptName"],
+                   "divCd": context["division"]["divCd"], "divNm": context["division"]["divNm"],
+                   "gisu": context["gisu"]["gisu"], "isuDt": accounting, "docTitle": sub["head"]["title"],
+                   "docugroupYn": "Y", "onlyCashFg": "1", "fileGroup": "0", "fileDc": "",
+                   "pjtCd": "", "pjtNm": "", "consDocTitle": "", "exdocuYn": "N"}
+    sub["rows"] = rows
+    sub["source"] = {"form": context["transferForm"], "gisu": context["gisu"]}
+    return sub
+
+
 def validate_expert(client, plan):
     """저장 직전 현재 그룹웨어 상태로 다시 확인한다. 쓰기 없음."""
     head = plan["head"]
-    if plan.get("kind") != "expertfee":
+    if plan.get("kind") not in ("expertfee", "expertfee-transfer"):
         raise ExpenseError("전문가 활용비 검토안이 아닙니다.")
     if str(head["coCd"]) != str(client.erp["companyCode"]) or str(head["empCd"]) != str(client.erp["userCode"]):
         raise ExpenseError("검토 파일과 현재 로그인 계정이 다릅니다.")
@@ -546,8 +727,18 @@ def validate_expert(client, plan):
         if hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest() != item["sha256"]:
             raise ExpenseError("첨부할 파일이 검토 이후 변경됐습니다: " + item["name"])
     since = (dt.datetime.strptime(head["isuDt"], "%Y%m%d") - dt.timedelta(days=366)).strftime("%Y%m%d")
-    documents = tx.tax_documents(client, since, tx.today_kst())
-    for payment in plan["payments"]:
+    if plan["kind"] == "expertfee-transfer":
+        # 같은 적요의 원천세 이체가 이미 있으면 막는다(반려 제외)
+        own = client.post(API + "0ap00001", {"appDateFrom": since, "appDateTo": tx.today_kst(), "docTitle": "", "fromAm": "",
+                                             "toAm": "", "docNo": "", "docStatus": "", "dateFg": "1"})
+        memos = {row["rmkDc"] for row in plan["rows"]}
+        for document in own:
+            if str(document.get("formId")) != TRANSFER_FORM_ID or str(document.get("approState")) in ("-3", "4"):
+                continue
+            if memos & {row.get("rmkDc") for row in client.document(document["linkKey"])["detail"]}:
+                raise ExpenseError(f"같은 적요의 원천세 이체(1212) 문서가 이미 있습니다: {document.get('docTitle')}")
+    documents = tx.tax_documents(client, since, tx.today_kst()) if plan["kind"] == "expertfee" else []
+    for payment in plan["payments"] if plan["kind"] == "expertfee" else []:
         blocking = [d for d in tx.find_duplicates(documents, {"issued": head["isuDt"], "total": payment["gross"], "supplier": payment["holder"] or payment["name"]})
                     if d["state"] != "4"]
         if blocking:
@@ -580,10 +771,10 @@ def verify_expert(client, journal):
         if loaded.get("attrNm") and loaded["attrNm"] != "기타":
             raise ExpenseError(f"저장된 증빙구분({loaded['attrNm']})이 기타가 아닙니다.")
         if str(loaded.get("decryptBaNb") or "") != row["baNb"]:
-            raise ExpenseError("저장 후 재조회한 수취 계좌가 통장 사본과 다릅니다.")
+            raise ExpenseError("저장 후 재조회한 수취 계좌가 검토안과 다릅니다.")
         observed.append({key: loaded.get(key) for key in sorted(loaded) if key not in ("baNb", "decryptBaNb", "regNb")})
     journal["observedRows"] = observed
-    eap = ex.eap_init(client, FORM_ID, journal["approKey"], journal["docId"])
+    eap = ex.eap_init(client, str(plan.get("formId") or FORM_ID), journal["approKey"], journal["docId"])
     info = eap["resultMap"]["appdocinfo"]
     if len(info) != 1 or str(info[0]["doc_sts"]) != "10" or info[0]["approkey"] != journal["approKey"]:
         raise ExpenseError("전자결재 임시보관 상태를 확인할 수 없습니다.")
@@ -687,19 +878,27 @@ def prepare_command(args):
     spec = json.loads(Path(args.spec).expanduser().read_text())
     FILES.mkdir(mode=0o700, parents=True, exist_ok=True)
     plan = build_plan(spec, FILES)
-    plan = erp_plan(plan, gather(Client(), spec))
+    context = gather(Client(), spec)
+    plan = erp_plan(plan, context)
+    if plan["transfer"].get("plan"):
+        plan["transfer"]["plan"] = erp_transfer(plan["transfer"]["plan"], context)
     write_private(Path(args.out).expanduser(), plan)
     print(json.dumps(summary(plan), ensure_ascii=False, indent=2))
 
 
 def check_command(args):
     plan = read_private(Path(args.plan).expanduser())
+    if args.transfer:
+        plan = (plan.get("transfer") or {}).get("plan")
+        if not plan:
+            raise ExpenseError("이 검토안에는 원천세 이체(1212)가 없습니다.")
     validate_expert(Client(), plan)
     print(f"저장 전 검증 통과: {len(plan['rows'])}명, 중복 문서 없음, 첨부 변경 없음, 마감일 확인")
 
 
 def journal_key(plan):
-    basis = "|".join([plan["head"]["isuDt"], plan["head"]["docTitle"]] + [f"{p['name']}:{p['gross']}" for p in plan["payments"]])
+    basis = "|".join([plan["kind"], plan["head"]["isuDt"], plan["head"]["docTitle"]]
+                     + [f"{p['name']}:{p.get('gross', p.get('amount'))}" for p in plan["payments"]])
     return hashlib.sha256(("expert:" + basis).encode()).hexdigest()
 
 
@@ -708,6 +907,10 @@ def draft_command(args):
     plan = read_private(Path(args.plan).expanduser())
     if plan.get("kind") != "expertfee":
         raise ExpenseError("전문가 활용비 검토안이 아닙니다.")
+    if args.transfer:
+        plan = (plan.get("transfer") or {}).get("plan")
+        if not plan:
+            raise ExpenseError("이 검토안에는 원천세 이체(1212)가 없습니다(운영비 계좌 지급이거나 원천세 0원).")
     DRAFTS.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = DRAFTS / (journal_key(plan) + ".json")
     with (DRAFTS / ".lock").open("a") as lock:
@@ -769,9 +972,11 @@ def main():
     command.set_defaults(run=prepare_command)
     command = commands.add_parser("check", help="현재 그룹웨어 데이터로 저장 전 검증 (쓰기 없음)")
     command.add_argument("plan")
+    command.add_argument("--transfer", action="store_true", help="원천세 이체(1212) 검토안을 검증")
     command.set_defaults(run=check_command)
-    command = commands.add_parser("draft", help="1210 임시보관 후 ERP·본문·첨부 재조회")
+    command = commands.add_parser("draft", help="1210 임시보관 후 ERP·본문·첨부 재조회 (--transfer면 1212 원천세 이체)")
     command.add_argument("plan")
+    command.add_argument("--transfer", action="store_true", help="같은 검토안의 원천세 이체(1212)를 임시보관")
     command.set_defaults(run=draft_command)
     command = commands.add_parser("status", help="전문가 활용비 작업 기록")
     command.set_defaults(run=status_command)
