@@ -258,7 +258,9 @@ def check_render():
         plan = tax.build_plan(many, context(directory, cardMatches={i["approval"]: [{"date": "20261002"}] for i in many}),
                               {"title": "제목 <확인>", "memo": ["첫 줄 & 사용료", "둘째"]})
         contents = tax.render(initial(plan["rows"]), {"deptName": "부서", "empName": "테스트"}, plan, "2026-10-12")
-        assert contents.count('mapping_key="rmkDc"') == 2 and "첫 줄 &amp; 사용료" in contents and "제목 &lt;확인&gt;" in contents
+        assert contents.count('mapping_key="rmkDc"') == 2 and "첫 줄 &amp; 사용료" in contents
+        # 화면 작성 1210과 같게 결재란 머리(양식 html, 제목·기안자)는 본문에 넣지 않는다.
+        assert "제목 &lt;확인&gt;" not in contents and "divInterJson" not in contents and "부서" not in contents
         assert "개별계좌 사업은" not in contents and "경영기획팀 전달사항" not in contents
         assert all(app.html.escape(line) in contents for line in plan["body"]["notes"])
         assert "<input" not in contents and "_DF" not in contents

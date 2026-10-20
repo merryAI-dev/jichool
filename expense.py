@@ -998,8 +998,9 @@ def native_binding(initial):
     return json.loads(raw)
 
 
-def render_native(initial, uc, title, today, layout=(2, 2), body_hook=None):
-    """layout은 반복 표의 (머리 행 수, 거래당 행 수). 1211은 (2, 2), 1210은 (3, 3)."""
+def render_native(initial, uc, title, today, layout=(2, 2), body_hook=None, wrap=True):
+    """layout은 반복 표의 (머리 행 수, 거래당 행 수). 1211은 (2, 2), 1210은 (3, 3).
+    wrap=False면 결재란 머리(양식 html) 없이 연동 본문만 돌려준다. 그룹웨어 화면으로 만든 1210 문서의 본문이 이 모양이다."""
     binding = native_binding(initial)
     def fill(template, values):
         def replace(match):
@@ -1040,6 +1041,10 @@ def render_native(initial, uc, title, today, layout=(2, 2), body_hook=None):
     body = fill(body[:table.start()] + table[1] + inner + table[3] + body[table.end():], binding["ITEMS"])
     if body_hook:
         body = body_hook(body)
+    if not wrap:
+        if re.search(r"_DF\w+_|<input\b", body, re.I):
+            raise ExpenseError("전자결재 본문에 미완성 입력값이 있습니다.")
+        return body
     values = {"_DF01_": "", "_DF02_": today, "_DF03_": uc["deptName"],
               "_DF04_": uc["empName"], "_DF10_": title}
     result = initial["html"]
@@ -1077,8 +1082,8 @@ def eap_draft_payload(initial, client, plan, appro_key, contents, attachments=()
     if data.get("appdocinfo") or len(data["docnumtype"]) != 1 or not data["hidAppDocLine"]:
         raise ExpenseError("신규 전자결재 기본 설정을 확인할 수 없습니다.")
     uc, form = client.uc, data["form_info"]
-    if str(form["form_id"]) != str(form_id) or str(form_id) not in ("1211", "1210") or str(data["outProcessInfo"]["contents_tp"]) != "3":
-        raise ExpenseError("검증한 지출결의 양식(1211 법인카드, 1210 세금계산서)만 임시저장할 수 있습니다.")
+    if str(form["form_id"]) != str(form_id) or str(form_id) not in ("1211", "1210", "1212") or str(data["outProcessInfo"]["contents_tp"]) != "3":
+        raise ExpenseError("검증한 지출결의 양식(1211 법인카드, 1210 세금계산서·전문가 활용비, 1212 원천세 자금이체)만 임시저장할 수 있습니다.")
     params = {"doc_id": 0, "form_id": int(form["form_id"]), "numbering_id": data["docnumtype"][0]["cd_val"],
               "rep_dt": None, "repdt_mod_yn": "0", "co_id": uc["compSeq"], "dept_id": uc["deptSeq"],
               "biz_id": uc["bizSeq"], "user_id": uc["empSeq"], "co_nm": uc["compName"],

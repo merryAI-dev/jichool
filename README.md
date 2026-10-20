@@ -212,9 +212,25 @@ python3 taxinvoice.py status --verify
 - 작업 기록은 `~/.config/mysc-expense/tax-drafts/`에 승인번호 기준으로 저장해 같은 세금계산서를 두 번 저장하지 않습니다.
 - `python3 test_taxinvoice.py`는 가상 세금계산서로 읽기·검토안·본문·저장 재개를 검증합니다. 본문 생성은 승인된 실제 문서(2026-05)의 바인딩 데이터로 재현해 저장된 본문과 텍스트가 일치함을 별도로 확인했습니다.
 
+## 그룹웨어 조회 API (`amaranth.py`)
+
+열람 권한이 있는 전자결재 문서를 찾고 읽는 조회 전용 계층입니다. Claude 스킬과 GPT 함수 호출이 같은 카탈로그를 씁니다.
+
+```sh
+python3 amaranth.py browser    # 분리된 프로필의 연결용 Chrome 창 (로그인은 사용자가)
+python3 amaranth.py login      # 그 창의 로그인 세션을 저장 (expense.py와 공유)
+python3 amaranth.py ops        # 조회 작업 목록
+python3 amaranth.py call document_search '{"doc_no": "MYSC-2025-4940"}'
+python3 amaranth.py tools --format openai   # GPT 함수 정의
+```
+
+- 출력은 주민등록번호·계좌번호를 가립니다. 카탈로그 밖 경로(저장·읽음 처리 등)는 호출하지 않습니다.
+- API 근거와 확장 방법은 [API_MAP.md](API_MAP.md), GPT 연결은 [GPT.md](GPT.md)를 보세요.
+
 ## 검증과 현재 범위
 
 ```sh
+python3 test_amaranth.py
 python3 test_expense.py
 python3 test_expense.py /비공개/실제.plan.json /비공개/신규양식조회.json /비공개/저장기록.json
 ```

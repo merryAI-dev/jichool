@@ -516,7 +516,8 @@ def render(initial, uc, plan, today):
     def footer(body):
         body = fill_cell(body, WITHDRAW_PLACEHOLDER, plan["body"]["withdraw"])
         return fill_cell(body, NOTE_PLACEHOLDER, plan["body"]["notes"])
-    contents = ex.render_native(initial, uc, plan["head"]["docTitle"], today, layout=LAYOUT, body_hook=footer)
+    # 1210은 화면 작성 문서와 같게 결재란 머리 없이 연동 본문만 저장한다(머리는 양식이 따로 그린다).
+    contents = ex.render_native(initial, uc, plan["head"]["docTitle"], today, layout=LAYOUT, body_hook=footer, wrap=False)
     if "callComp=APB1020PCard" in contents:
         raise ExpenseError("세금계산서 본문에 카드 영수증 링크가 있습니다.")
     expected = [html.escape(row["rmkDc"]) for row in plan["rows"]] + [html.escape(line) for line in plan["body"]["notes"]]
@@ -579,7 +580,7 @@ def verify_tax(client, journal):
     journal["status"] = "verified"
 
 
-def recover(client, journal):
+def recover(client, journal, verify=None):
     """저장 응답 대신 실제 연결 상태를 재조회한다. 쓰기는 재시도하지 않는다."""
     if not journal.get("docId") and journal.get("linkKey"):
         linked = client.post(API + "0ap00020", {"linkKey": journal["linkKey"]})
@@ -588,11 +589,14 @@ def recover(client, journal):
             journal["docId"] = int(matches[0]["docId"])
     if not journal.get("docId"):
         raise ExpenseError("저장 결과를 확인할 수 없습니다. 재전송하지 않았습니다. 그룹웨어에서 확인하세요.")
-    verify_tax(client, journal)
+    (verify or verify_tax)(client, journal)
 
 
-def continue_draft(client, journal, path):
-    """확인된 단계는 건너뛰고, 결과가 불명확한 쓰기는 재전송하지 않는다."""
+def continue_draft(client, journal, path, validate_plan=None, verify=None):
+    """확인된 단계는 건너뛰고, 결과가 불명확한 쓰기는 재전송하지 않는다.
+    같은 1210 양식을 쓰는 전문가 활용비(expertfee.py)는 검증 함수만 바꿔 끼운다."""
+    validate_plan = validate_plan or validate
+    form_id = str(journal["plan"].get("formId") or FORM_ID)   # 전문가 활용비 원천세 이체는 1212
     def save(status=None):
         if status:
             journal["status"] = status
@@ -602,7 +606,7 @@ def continue_draft(client, journal, path):
         raise ExpenseError("다른 사용자 작업 기록입니다.")
     if journal.get("docId") or journal["status"] in ("eap_attempted", "eap_saved", "verified"):
         try:
-            recover(client, journal)
+            recover(client, journal, verify)
         finally:
             save()
         return
@@ -610,8 +614,8 @@ def continue_draft(client, journal, path):
         raise ExpenseError(f"{journal['status']}: 쓰기 결과가 불명확합니다. 재전송하지 않았습니다. 그룹웨어에서 확인하세요.")
     form = plan["source"]["form"]
     if journal["status"] == "prepared":
-        validate(client, plan)
-        initial = ex.eap_init(client, FORM_ID)
+        validate_plan(client, plan)
+        initial = ex.eap_init(client, form_id)
         if initial["resultMap"].get("appdocinfo") or len(initial["resultMap"]["docnumtype"]) != 1:
             raise ExpenseError("신규 전자결재 양식 초기화를 확인할 수 없습니다.")
         journal["attachments"] = []
@@ -644,17 +648,17 @@ def continue_draft(client, journal, path):
             raise ExpenseError("채번된 문서 연결키가 중복됩니다.")
         if any(item.get("docId") for item in linked):
             try:
-                recover(client, journal)
+                recover(client, journal, verify)
             finally:
                 save()
             return
         save("erp_attempted")
         client.post(API + "0ap01001", {"consList": [], "head": head, "detail": detail, "budgetList": None})
         save("erp_saved")
-    initial = ex.eap_init(client, FORM_ID, journal["approKey"])
+    initial = ex.eap_init(client, form_id, journal["approKey"])
     contents = render(initial, client.uc, plan, dt.datetime.now(KST).strftime("%Y-%m-%d"))
     payload = ex.eap_draft_payload(initial, client, plan, journal["approKey"], contents,
-                                   journal.get("attachments", []), form_id=FORM_ID)
+                                   journal.get("attachments", []), form_id=form_id)
     save("eap_attempted")
     try:
         result = client.post("/eap/eap110A06", payload)
@@ -665,7 +669,7 @@ def continue_draft(client, journal, path):
         journal["saveResponse"] = client.last_response
         save()
     try:
-        recover(client, journal)
+        recover(client, journal, verify)
     finally:
         save()
 
