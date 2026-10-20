@@ -179,6 +179,40 @@ def check_scan(folder):
     print("묶기: 흩어진 폴더·제각각 파일명·폴더 이름·중복 통장·주인 모를 사진 분리, spec 뼈대 미리 채우기 통과")
 
 
+def check_real_world(folder):
+    """2026-10-20 실전 테스트(문서 128783)에서 나온 경우: 합본 서류·영문 파일명·법인·확인서 없음·행별 프로젝트·사람별 적요."""
+    root = folder / "real"
+    root.mkdir()
+    for name in ("Minjung Kal_CV_Business Manager.pdf", "신분증, 통장사본_갈민정.pdf", "마이오렌지_견적서_MYSC.pdf",
+                 "마이오렌지_통장사본_하나은행.pdf", "마이오렌지_사업자등록증.pdf"):
+        (root / name).write_bytes(b"%PDF-1.4")
+    ef.read_confirmation = lambda path: None
+    result = ef.scan_folders([root], ["갈민정", "마이오렌지"], {"Minjung Kal": "갈민정"})
+    people = {p["name"]: p for p in result["people"]}
+    assert not result["unassigned"]
+    assert set(people["갈민정"]["documents"]) == {"idCard", "bankbook", "resume"}
+    assert people["갈민정"]["documents"]["idCard"] == people["갈민정"]["documents"]["bankbook"]
+    assert set(people["마이오렌지"]["documents"]) == {"bankbook", "quote", "businessReg"}
+
+    spec = spec_for(folder)
+    person = spec["payees"][0]
+    person["documents"]["bankbook"] = person["documents"]["idCard"]          # 신분증+통장 합본
+    person.update(memo="26경기사경_10월 오피스아워(홍길동)", project="PP0002")
+    plan = ef.build_plan(spec, folder)
+    assert [a["name"] for a in plan["attachments"]] == ["1. 비용지급확인서(홍길동)", "2. 신분증, 통장 사본(홍길동)"]
+    assert plan["payments"][0]["memo"] == "26경기사경_10월 오피스아워(홍길동)" and plan["payments"][0]["project"] == "PP0002"
+
+    company = spec_for(folder)
+    company["payees"][0].update(name="마이오렌지", holder="마이오렌지 주식회사", holderConfirmed=True, incomeType="business")
+    del company["payees"][0]["documents"]["confirmation"]
+    issues = ef.build_plan(company, folder)["issues"]
+    assert any("원천징수 대상이 아닙니다" in i for i in issues) and any("비용지급확인서 첨부 필요" in i for i in issues)
+    company["payees"][0].update(corporateOverrideForTest=True, documentsWaived=["confirmation"])
+    allowed = ef.build_plan(company, folder)
+    assert not allowed["issues"] and any("테스트 전용" in w for w in allowed["warnings"])
+    print("실전: 합본 서류·영문 파일명(alias)·견적서/사업자등록증·법인 차단(테스트 예외)·확인서 생략 확인·행별 프로젝트·사람별 적요 통과")
+
+
 if __name__ == "__main__":
     check_withholding()
     check_confirmation()
@@ -188,3 +222,4 @@ if __name__ == "__main__":
         check_plan(folder)
         check_erp_rows(folder)
         check_scan(folder)
+        check_real_world(folder)

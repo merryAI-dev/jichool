@@ -141,7 +141,12 @@ DOC_KEYWORDS = {
     "idCard": ("신분증", "주민등록증", "운전면허", "면허증", "여권", "외국인등록"),
     "bankbook": ("통장", "계좌", "bankbook"),
     "resume": ("이력서", "경력", "프로필", "resume", "cv"),
+    "quote": ("견적서", "산출내역", "견적"),
+    "businessReg": ("사업자등록증", "사업자등록"),
 }
+# 필수 3종 다음에 근거로 함께 첨부하는 서류(있을 때만)
+EXTRA_DOCUMENTS = (("quote", "견적서"), ("businessReg", "사업자등록증"))
+CORPORATE = re.compile(r"(주식회사|\(주\)|㈜|유한회사|법인|재단|사단|협동조합)")
 # 파일·폴더 이름에서 사람 이름을 고를 때 빼는 말
 NAME_STOPWORDS = {word for words in DOC_KEYWORDS.values() for word in words} | {
     "사본", "원본", "스캔", "최종", "수정", "자문비", "심사비", "강의비", "강사비", "연사비", "사례비", "자문", "심사",
@@ -157,12 +162,19 @@ def to_jpeg(source, target):
     return Path(target)
 
 
+def document_kinds(path):
+    """파일 이름에 들어 있는 서류 종류를 모두 돌려준다. '신분증, 통장사본_갈민정.pdf'는 신분증·통장 둘 다."""
+    text = path.stem.lower()
+    kinds = [kind for kind, words in DOC_KEYWORDS.items() if any(word.lower() in text for word in words)]
+    if not kinds:
+        folder = path.parent.name.lower()
+        kinds = [kind for kind, words in DOC_KEYWORDS.items() if any(word.lower() in folder for word in words)]
+    return kinds
+
+
 def document_kind(path):
-    text = (str(path.parent.name) + " " + path.stem).lower()
-    for kind, words in DOC_KEYWORDS.items():
-        if any(word.lower() in text for word in words):
-            return kind
-    return None
+    kinds = document_kinds(path)
+    return kinds[0] if kinds else None
 
 
 def name_candidates(path, known=()):
@@ -184,7 +196,7 @@ def name_candidates(path, known=()):
     return list(dict.fromkeys(found))
 
 
-def scan_folders(folders, names=()):
+def scan_folders(folders, names=(), aliases=None):
     """흩어진 증빙 파일을 사람별·서류 종류별로 묶는다. 판단이 안 되는 파일은 unassigned로 남긴다(추측 금지)."""
     files = []
     for folder in folders:
@@ -195,19 +207,22 @@ def scan_folders(folders, names=()):
         files.extend(path for path in candidates if path.is_file() and path.suffix.lower() in SCAN_SUFFIXES
                      and not path.name.startswith("."))
     people, unassigned = {}, []
-    known = list(names)
+    aliases = dict(aliases or {})   # 영문 파일명 → 한글 이름 (예: "Minjung Kal" → "갈민정")
+    known = list(names) + list(aliases.values())
     for path in files:
-        kind = document_kind(path)
-        found = name_candidates(path, known)
-        if kind is None or len(found) != 1:
-            unassigned.append({"path": str(path), "kind": kind, "names": found,
-                               "reason": "서류 종류를 알 수 없음" if kind is None else ("이름 없음" if not found else "이름 후보가 여럿")})
+        kinds = document_kinds(path)
+        alias = next((name for key, name in aliases.items() if key.lower() in path.name.lower()), None)
+        found = [alias] if alias else name_candidates(path, known)
+        if not kinds or len(found) != 1:
+            unassigned.append({"path": str(path), "kind": kinds[0] if kinds else None, "names": found,
+                               "reason": "서류 종류를 알 수 없음" if not kinds else ("이름 없음(영문이면 --alias)" if not found else "이름 후보가 여럿")})
             continue
         person = people.setdefault(found[0], {"name": found[0], "documents": {}, "extra": []})
-        if kind in person["documents"]:
-            person["extra"].append({"kind": kind, "path": str(path)})
-        else:
-            person["documents"][kind] = str(path)
+        for kind in kinds:
+            if kind in person["documents"]:
+                person["extra"].append({"kind": kind, "path": str(path)})
+            else:
+                person["documents"][kind] = str(path)
     for person in people.values():
         confirmation = person["documents"].get("confirmation")
         person["fromConfirmation"] = None
@@ -231,7 +246,7 @@ def init_spec(scan, common=None):
                        "gross": amounts[-1] if len(amounts) == 1 else None,
                        "bank": None, "account": None, "accountDisplay": None, "holder": None, "accountSource": None,
                        "rrnFront": births[0] if len(births) == 1 else None, "bankbookBusiness": None,
-                       "documents": {key: person["documents"][key] for key, _ in DOCUMENTS if key in person["documents"]}})
+                       "documents": {key: person["documents"][key] for key, _ in DOCUMENTS + EXTRA_DOCUMENTS if key in person["documents"]}})
     spec = {"program": None, "purpose": None, "memoTemplate": "{program}_{purpose}({name})", "project": None,
             "accountingDate": None, "funding": None, "payees": payees}
     spec.update({key: value for key, value in (common or {}).items() if value is not None})
@@ -251,6 +266,8 @@ def scan_table(scan):
 
 def memo_for(spec, payee):
     """적요. 사람마다 용도가 다르면(서류 심사비·발표 심사비) payee.purpose가 앞선다. 이름은 한글 이름(name)."""
+    if payee.get("memo"):          # 사람마다 사업명이 다르면 확인받은 적요를 그대로 쓴다
+        return payee["memo"]
     template = spec.get("memoTemplate") or "{program}_{purpose}({name})"
     return template.format(program=spec["program"], purpose=payee.get("purpose") or spec["purpose"], name=payee["name"])
 
@@ -271,11 +288,15 @@ def attachments_for(spec, payees, workdir):
     folder.mkdir(mode=0o700, parents=True)
     files, number = [], 1
     for payee in payees:
-        for key, label in DOCUMENTS:
-            source = (payee.get("documents") or {}).get(key)
-            if not source:
-                continue
-            source = Path(source).expanduser().resolve()
+        documents = payee.get("documents") or {}
+        # 같은 파일이 여러 서류를 담으면(신분증+통장) 한 번만, 이름은 서류명을 이어 붙인다.
+        groups = {}
+        for key, label in DOCUMENTS + EXTRA_DOCUMENTS:
+            if documents.get(key):
+                groups.setdefault(str(Path(documents[key]).expanduser().resolve()), []).append(label)
+        for source, labels in groups.items():
+            source = Path(source)
+            label = ", ".join(labels) if len(labels) == 1 else ", ".join(l.replace(" 사본", "") for l in labels[:-1]) + ", " + labels[-1]
             name = f"{number}. {label}({payee['name']})"
             target = folder / f"{name}.pdf"
             if source.suffix.lower() in (".jpg", ".jpeg"):
@@ -300,7 +321,7 @@ def build_plan(spec, workdir):
     payees = spec.get("payees") or []
     if not payees:
         raise ExpenseError("지급 대상(payees)이 없습니다.")
-    for key in ("program", "purpose", "project", "accountingDate", "funding"):
+    for key in ("program", "purpose", "accountingDate", "funding"):
         if not spec.get(key):
             issues.append(f"{key} 확인 필요")
     funding = spec.get("funding")
@@ -328,9 +349,20 @@ def build_plan(spec, workdir):
         tax = withholding(income_type, gross)
         account = re.sub(r"\D", "", str(payee.get("account") or ""))
         documents = payee.get("documents") or {}
+        waived = set(payee.get("documentsWaived") or [])
         for key, name in DOCUMENTS:
             if not documents.get(key):
-                issues.append(f"{label}: {name} 첨부 필요")
+                if key in waived:
+                    warnings.append(f"{label}: {name} 없이 올립니다(사용자 확인). 재경팀이 요청할 수 있습니다.")
+                else:
+                    issues.append(f"{label}: {name} 첨부 필요")
+        # 법인에 주는 용역 대가는 원천징수(사업·기타소득)가 아니라 세금계산서로 처리한다.
+        if CORPORATE.search(str(payee.get("holder") or "") + " " + str(payee.get("name") or "")) or documents.get("businessReg"):
+            message = f"{label}: 사업자(법인)에게 주는 대가는 원천징수 대상이 아닙니다. 세금계산서를 받아 세금계산서 흐름으로 처리하세요."
+            if payee.get("corporateOverrideForTest"):
+                warnings.append(message + " (테스트 전용으로 진행)")
+            else:
+                issues.append(message)
         confirmation = read_confirmation(documents["confirmation"]) if documents.get("confirmation") else None
         if confirmation:
             if confirmation["incomeType"] and confirmation["incomeType"] != income_type:
@@ -359,7 +391,8 @@ def build_plan(spec, workdir):
         if tax.get("note"):
             warnings.append(f"{label}: {tax['note']}")
         memo = memo_for(spec, payee)
-        payments.append({"name": payee["name"], "purpose": payee.get("purpose") or spec.get("purpose"), "incomeType": income_type, **{k: INCOME[income_type][k] for k in ("cashCd", "cashNm")},
+        payments.append({"name": payee["name"], "purpose": payee.get("purpose") or spec.get("purpose"), "incomeType": income_type,
+                         "project": payee.get("project") or spec.get("project"), **{k: INCOME[income_type][k] for k in ("cashCd", "cashNm")},
                      "memo": memo, "gross": gross, "vat": 0, **tax, "bank": payee.get("bank"), "account": account,
                      "holder": payee.get("holder"), "accountDisplay": payee.get("accountDisplay") or payee.get("account"),
                      "evidence": "기타", "evidenceDate": spec.get("accountingDate")})
@@ -369,6 +402,8 @@ def build_plan(spec, workdir):
     # 적요·제목·프로젝트는 과거 사례로 초안을 쓰고 사람에게 보여준 뒤에만 저장한다.
     if not spec.get("memoConfirmed"):
         issues.append("적요·제목 초안을 사용자에게 보여주고 확인받은 뒤 memoConfirmed: true로 표시하세요.")
+    if not spec.get("project") and not all(payee.get("project") for payee in payees):
+        issues.append("project 확인 필요 (문서 공통 또는 사람별)")
     if not spec.get("projectConfirmed"):
         issues.append("프로젝트를 사용자에게 확인받은 뒤 projectConfirmed: true로 표시하세요.")
     if funding == "project" and not spec.get("projectAccount"):
@@ -446,14 +481,16 @@ def erp_plan(plan, context):
     account, company = context["account"], context["division"]["divNm"]
     issues = plan["issues"]
     accounting = date_value(plan["head"]["accountingDate"] or context["today"])
-    project = project_code(context["projects"], plan["head"]["project"])
-    if not project:
-        issues.append(f"프로젝트 '{plan['head']['project']}'를 하나로 찾지 못했습니다. 프로젝트 코드로 지정하세요.")
     usable = {str(item["typeCd"]) for item in context["cashTypes"]}
     snapshot = {"dateRules": context["dateRules"], "accountingDate": accounting,
                 "cashTypes": context["cashTypes"], "projects": context["projects"]}
     rows = []
     for index, payment in enumerate(plan["payments"], 1):
+        # 사람(행)마다 프로젝트가 다를 수 있다(한 문서에 여러 사업). 없으면 문서 공통 프로젝트.
+        wanted = payment.get("project") or plan["head"]["project"]
+        project = project_code(context["projects"], wanted)
+        if not project:
+            issues.append(f"{index}행: 프로젝트 '{wanted}'를 하나로 찾지 못했습니다. 프로젝트 코드로 지정하세요.")
         bank = bank_code(context["banks"], payment["bank"])
         if not bank:
             issues.append(f"{index}행: 은행 '{payment['bank']}'의 코드를 하나로 찾지 못했습니다.")
@@ -621,7 +658,8 @@ def projects_command(args):
 
 
 def scan_command(args):
-    result = scan_folders(args.folder, args.name or ())
+    aliases = dict(item.split("=", 1) for item in (args.alias or []))
+    result = scan_folders(args.folder, args.name or (), aliases)
     if args.out:
         write_private(Path(args.out).expanduser(), result, replace=True)
     print("\n".join(scan_table(result)))
@@ -705,6 +743,7 @@ def main():
     command = commands.add_parser("scan", help="흩어진 증빙 파일을 사람별·서류별로 묶기 (네트워크 없음)")
     command.add_argument("folder", nargs="+", help="폴더(하위 폴더 포함) 또는 파일. 여러 개 가능")
     command.add_argument("--name", action="append", help="지급 대상 이름을 알면 반복해서 지정 (이름 판단이 정확해짐)")
+    command.add_argument("--alias", action="append", help="영문 파일명 연결. 예: \"Minjung Kal=갈민정\"")
     command.add_argument("--out", help="묶음 결과 저장 파일 (init에 씀)")
     command.set_defaults(run=scan_command)
     command = commands.add_parser("init", help="scan 결과로 spec 뼈대 만들기")
