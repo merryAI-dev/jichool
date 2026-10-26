@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# ///
 """실행: python3 test_expense.py [실제 조회로 생성한 .plan.json 파일]"""
 import copy
 import contextlib
@@ -17,6 +21,7 @@ import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 import expense as app
+import pdftext
 from statement import StatementError, match_candidates, read_statement
 
 from expense import (API, Client, ExpenseError, edit, make_plan, native_binding, preflight, read_private,
@@ -201,19 +206,15 @@ def check():
                 assert hashlib.sha256(Path(adjustment["evidencePath"]).read_bytes()).hexdigest() == adjustment["sha256"]
         if saved.get("statement"):
             # ponytail: 이번 현대카드 A4 명세서 검증. 서식 변경 시 좌표·열 확인을 다시 한다.
-            raw = subprocess.run(["pdftotext", "-bbox", saved["statement"]["file"], "-"], capture_output=True, check=True).stdout
-            root = ET.fromstring(raw)
-            namespace = {"x": "http://www.w3.org/1999/xhtml"}
             charges = []
-            for page in root.findall(".//x:page", namespace):
-                words = page.findall("x:word", namespace)
+            for words in pdftext.pages(saved["statement"]["file"]):
                 for word in words:
-                    if float(word.get("xMin")) < 100 and re.fullmatch(r"\d{6}", word.text or ""):
-                        amounts = [value for value in words if 430 < float(value.get("xMin")) < 480
-                                   and 0 < float(value.get("yMin")) - float(word.get("yMin")) < 12
-                                   and re.fullmatch(r"[\d,]+", value.text or "")]
+                    if word["xMin"] < 100 and re.fullmatch(r"\d{6}", word["text"]):
+                        amounts = [value for value in words if 430 < value["xMin"] < 480
+                                   and 0 <= value["yMin"] - word["yMin"] < 12
+                                   and re.fullmatch(r"[\d,]+", value["text"])]
                         assert len(amounts) == 1, "청구금액 열을 한 개로 식별할 수 없습니다"
-                        charges.append(("20" + word.text, int(amounts[0].text.replace(",", ""))))
+                        charges.append(("20" + word["text"], int(amounts[0]["text"].replace(",", ""))))
             assert len(charges) == saved["statement"]["count"]
             assert sum(amount for _, amount in charges) == saved["statement"]["total"]
             positive = [(item["expense"]["cardDt"], item["expense"]["sumAm"])

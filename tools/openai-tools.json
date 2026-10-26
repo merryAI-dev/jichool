@@ -1,0 +1,175 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "document_boxes",
+      "description": "전자결재 문서함 목록(상신·기결·수신참조·이전문서 등)과 menuId. document_search의 box에 쓴다.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "document_search",
+      "description": "열람 권한이 있는 전자결재 문서를 문서번호·제목·본문·기안자·문서함·기간으로 찾는다. 다른 사람이 기안한 문서도 결재·참조·공개 범위 안이면 나온다. 결과의 docId로 document_view를 호출한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "doc_no": {
+            "type": "string",
+            "description": "문서번호 (예: MYSC-2025-4940)"
+          },
+          "title": {
+            "type": "string",
+            "description": "제목에 포함된 말"
+          },
+          "content": {
+            "type": "string",
+            "description": "본문에 포함된 말"
+          },
+          "drafter": {
+            "type": "string",
+            "description": "기안자 이름"
+          },
+          "box": {
+            "type": "string",
+            "description": "document_boxes의 menuId. 비우면 전체"
+          },
+          "date_from": {
+            "type": "string",
+            "description": "기안일 시작 YYYY-MM-DD (기본 1년 전)"
+          },
+          "date_to": {
+            "type": "string",
+            "description": "기안일 끝 YYYY-MM-DD (기본 오늘)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "페이지 (기본 1)"
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "페이지 크기 (기본 20, 최대 100)"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "document_view",
+      "description": "전자결재 문서 한 건의 본문을 읽는다(조회만, 읽음 처리 호출 없음). erpTable은 지출결의 행(계정·적요·증빙·프로젝트·거래처·금액), body는 수취 계좌·출금계좌·비고 등이다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "doc_id": {
+            "type": "integer",
+            "description": "document_search 결과의 docId"
+          }
+        },
+        "required": [
+          "doc_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "expense_list",
+      "description": "내가 기안한 지출결의(ERP 연동) 목록. formId 1210 세금계산서·외부인건비, 1211 법인카드, 1212 자금이체 등.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_from": {
+            "type": "string",
+            "description": "YYYY-MM-DD (기본 1년 전)"
+          },
+          "date_to": {
+            "type": "string",
+            "description": "YYYY-MM-DD (기본 오늘)"
+          },
+          "form_id": {
+            "type": "string",
+            "description": "양식 번호로 거르기 (예: 1210)"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "expense_document",
+      "description": "내가 기안한 지출결의 한 건의 ERP 머리·행 원본(용도·프로젝트·거래처·금액·계좌 코드). expense_list의 linkKey를 쓴다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "linkKey": {
+            "type": "string",
+            "description": "expense_list의 linkKey"
+          }
+        },
+        "required": [
+          "linkKey"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "purpose_codes",
+      "description": "양식별 용도(계정) 코드. deductFg 5는 원천징수 대상(0290 사업소득·0300 기타소득지급수수료).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "form_id": {
+            "type": "integer",
+            "description": "양식 번호 (기본 1210)"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "payment_methods",
+      "description": "지급수단(paymethodFg)별 증빙구분 코드(attrCd).",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "expense_forms",
+      "description": "사용 가능한 지출결의 양식 목록(formId·이름·사용 여부).",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  }
+]

@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""MYSC 세금계산서·계산서 지출결의(양식 1210) CLI. Python 표준 라이브러리만 사용한다.
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30"]
+# ///
+"""MYSC 세금계산서·계산서 지출결의(양식 1210) CLI. PDF 읽기(pypdfium2) 외에는 Python 표준 라이브러리만 사용한다.
 
 - 인식용(recognition): [영수] 증빙. 법인카드·이체로 이미 결제했고 회계 인식만 필요한 건.
 - 지급요청(payment): [청구] 증빙. 회사가 거래처 계좌로 지급해야 하는 건.
@@ -7,7 +11,6 @@
 
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import html
 import json
@@ -19,6 +22,7 @@ import sys
 import urllib.parse
 
 import expense as ex
+import pdftext
 from expense import API, CONFIG, Client, ExpenseError, date_value, read_private, won, write_private
 
 
@@ -118,10 +122,9 @@ def read_invoice(path):
     if not raw.startswith(b"%PDF-"):
         raise ExpenseError(f"PDF 파일이 아닙니다: {path.name}")
     try:
-        text = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True,
-                              check=True).stdout.decode("utf-8", "replace")
-    except FileNotFoundError:
-        raise ExpenseError("PDF를 읽으려면 pdftotext가 필요합니다. (brew install poppler)") from None
+        text = pdftext.layout_text(path)
+    except pdftext.PdfTextError as error:
+        raise ExpenseError(f"{path.name}: {error}") from None
     if not text.strip():
         raise ExpenseError(f"글자를 읽을 수 없는 PDF입니다(스캔본 등): {path.name}")
     try:
@@ -516,7 +519,8 @@ def render(initial, uc, plan, today):
     def footer(body):
         body = fill_cell(body, WITHDRAW_PLACEHOLDER, plan["body"]["withdraw"])
         return fill_cell(body, NOTE_PLACEHOLDER, plan["body"]["notes"])
-    contents = ex.render_native(initial, uc, plan["head"]["docTitle"], today, layout=LAYOUT, body_hook=footer)
+    # 1210은 화면 작성 문서와 같게 결재란 머리 없이 연동 본문만 저장한다(머리는 양식이 따로 그린다).
+    contents = ex.render_native(initial, uc, plan["head"]["docTitle"], today, layout=LAYOUT, body_hook=footer, wrap=False)
     if "callComp=APB1020PCard" in contents:
         raise ExpenseError("세금계산서 본문에 카드 영수증 링크가 있습니다.")
     expected = [html.escape(row["rmkDc"]) for row in plan["rows"]] + [html.escape(line) for line in plan["body"]["notes"]]
@@ -579,7 +583,7 @@ def verify_tax(client, journal):
     journal["status"] = "verified"
 
 
-def recover(client, journal):
+def recover(client, journal, verify=None):
     """저장 응답 대신 실제 연결 상태를 재조회한다. 쓰기는 재시도하지 않는다."""
     if not journal.get("docId") and journal.get("linkKey"):
         linked = client.post(API + "0ap00020", {"linkKey": journal["linkKey"]})
@@ -588,11 +592,14 @@ def recover(client, journal):
             journal["docId"] = int(matches[0]["docId"])
     if not journal.get("docId"):
         raise ExpenseError("저장 결과를 확인할 수 없습니다. 재전송하지 않았습니다. 그룹웨어에서 확인하세요.")
-    verify_tax(client, journal)
+    (verify or verify_tax)(client, journal)
 
 
-def continue_draft(client, journal, path):
-    """확인된 단계는 건너뛰고, 결과가 불명확한 쓰기는 재전송하지 않는다."""
+def continue_draft(client, journal, path, validate_plan=None, verify=None):
+    """확인된 단계는 건너뛰고, 결과가 불명확한 쓰기는 재전송하지 않는다.
+    같은 1210 양식을 쓰는 전문가 활용비(expertfee.py)는 검증 함수만 바꿔 끼운다."""
+    validate_plan = validate_plan or validate
+    form_id = str(journal["plan"].get("formId") or FORM_ID)   # 전문가 활용비 원천세 이체는 1212
     def save(status=None):
         if status:
             journal["status"] = status
@@ -602,7 +609,7 @@ def continue_draft(client, journal, path):
         raise ExpenseError("다른 사용자 작업 기록입니다.")
     if journal.get("docId") or journal["status"] in ("eap_attempted", "eap_saved", "verified"):
         try:
-            recover(client, journal)
+            recover(client, journal, verify)
         finally:
             save()
         return
@@ -610,8 +617,8 @@ def continue_draft(client, journal, path):
         raise ExpenseError(f"{journal['status']}: 쓰기 결과가 불명확합니다. 재전송하지 않았습니다. 그룹웨어에서 확인하세요.")
     form = plan["source"]["form"]
     if journal["status"] == "prepared":
-        validate(client, plan)
-        initial = ex.eap_init(client, FORM_ID)
+        validate_plan(client, plan)
+        initial = ex.eap_init(client, form_id)
         if initial["resultMap"].get("appdocinfo") or len(initial["resultMap"]["docnumtype"]) != 1:
             raise ExpenseError("신규 전자결재 양식 초기화를 확인할 수 없습니다.")
         journal["attachments"] = []
@@ -644,17 +651,17 @@ def continue_draft(client, journal, path):
             raise ExpenseError("채번된 문서 연결키가 중복됩니다.")
         if any(item.get("docId") for item in linked):
             try:
-                recover(client, journal)
+                recover(client, journal, verify)
             finally:
                 save()
             return
         save("erp_attempted")
         client.post(API + "0ap01001", {"consList": [], "head": head, "detail": detail, "budgetList": None})
         save("erp_saved")
-    initial = ex.eap_init(client, FORM_ID, journal["approKey"])
+    initial = ex.eap_init(client, form_id, journal["approKey"])
     contents = render(initial, client.uc, plan, dt.datetime.now(KST).strftime("%Y-%m-%d"))
     payload = ex.eap_draft_payload(initial, client, plan, journal["approKey"], contents,
-                                   journal.get("attachments", []), form_id=FORM_ID)
+                                   journal.get("attachments", []), form_id=form_id)
     save("eap_attempted")
     try:
         result = client.post("/eap/eap110A06", payload)
@@ -665,7 +672,7 @@ def continue_draft(client, journal, path):
         journal["saveResponse"] = client.last_response
         save()
     try:
-        recover(client, journal)
+        recover(client, journal, verify)
     finally:
         save()
 
@@ -682,8 +689,7 @@ def draft(args):
     DRAFTS.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = DRAFTS / (journal_key(plan) + ".json")
     approvals = {invoice["approval"] for invoice in plan["invoices"]}
-    with (DRAFTS / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ex.exclusive(DRAFTS / ".lock"):
         if path.exists():
             journal = read_private(path)
             if journal["plan"] != plan:
@@ -706,8 +712,7 @@ def retire_command(args):
     path = Path(args.journal).expanduser().resolve()
     if path.parent != DRAFTS.resolve():
         raise ExpenseError("세금계산서 작업 기록 폴더 안의 JSON을 지정하세요.")
-    with (DRAFTS / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ex.exclusive(DRAFTS / ".lock"):
         journal = read_private(path)
         head = journal["plan"]["head"]
         if str(head["coCd"]) != str(client.erp["companyCode"]) or str(head["empCd"]) != str(client.erp["userCode"]):
