@@ -28,23 +28,30 @@ git clone https://github.com/merryAI-dev/jichool.git ~/.claude/skills/jichool
 
 ## 아래부터는 기술 문서입니다
 
-정상 로그인한 본인 계정으로 카드·원본 영수증을 조회하고, 현대카드 PDF 명세서와 대조한 뒤 전자결재에 임시보관합니다. CLI와 Python 표준 라이브러리를 사용하며, PDF 텍스트 추출에 설치된 Poppler의 `pdftotext`를 사용합니다. 그룹웨어 API를 직접 호출합니다. 외부 AI API·웹 서버·브라우저 자동화는 사용하지 않습니다.
+정상 로그인한 본인 계정으로 카드·원본 영수증을 조회하고, 현대카드 PDF 명세서와 대조한 뒤 전자결재에 임시보관합니다. CLI는 Python 표준 라이브러리에 PDF 읽기용 `pypdfium2`(전문가 활용비는 사진 변환용 `Pillow`)만 더해 씁니다. 두 패키지 모두 macOS·Windows·Linux용 완성본이 있어 빌드가 없습니다. 그룹웨어 API를 직접 호출합니다. 외부 AI API·웹 서버·브라우저 자동화는 사용하지 않습니다.
 
 Claude가 따르는 진행 절차는 같은 폴더의 `SKILL.md`에 있으며, 스킬은 아래 명령과 JSON 응답을 호출할 뿐 새로운 API 연동을 추가하지 않습니다.
 
 ## 처음 한 번: 설치와 정상 로그인
 
-이 폴더의 `expense.py`, `statement.py`를 함께 보관합니다. Python 3.10 이상, macOS 또는 Linux가 필요합니다. Windows에서는 파일 잠금을 위해 WSL 환경이 필요합니다.
+이 폴더의 `.py` 파일을 함께 보관합니다. 필요한 것은 **uv 하나**입니다. uv가 맞는 Python(3.10 이상)과 PDF 패키지를 처음 실행할 때 알아서 받아 둡니다(수 초). Homebrew·Poppler·WSL·가상환경 설정은 필요 없습니다.
 
 ```sh
-python3 --version
-pdftotext -v
-# pdftotext가 없으면 macOS에서 실행
-brew install poppler
+# macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+```powershell
+# Windows (PowerShell, 관리자 권한 불필요)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+설치 후 터미널을 새로 열고 `uv --version`으로 확인합니다. 이후 모든 명령은 `python3 …` 대신 `uv run …`으로 실행합니다. 각 스크립트 첫머리(`# /// script`)에 필요한 Python 버전과 패키지가 적혀 있어 uv가 그대로 맞춥니다.
+
+그룹웨어 연결용 창과 원천세 계산표 PDF에는 Chrome을 쓰고, 없으면 Edge(Windows 기본 설치)를 씁니다.
+
 1. 사용자가 브라우저에서 `https://gw.mysc.co.kr`에 평소 방식으로 로그인합니다. SSO·추가 인증도 직접 완료합니다. 이미 로그인돼 있으면 그대로 씁니다.
-2. 그 그룹웨어 탭에서 개발자 도구 Console(`option`+`command`+`J`)을 열고 아래 한 줄을 실행합니다. 그룹웨어 화면은 현재 세션(`auth_a_token`, `hash_key`, `ucUserInfo`, `erpUserInfo`)을 `sessionStorage.userInfo`에 보관하고 모든 요청을 이 값으로 서명하므로, 항상 화면이 쓰는 최신 세션이 복사됩니다. 값은 화면에 출력되지 않고 클립보드로만 갑니다.
+2. 그 그룹웨어 탭에서 개발자 도구 Console(macOS `option`+`command`+`J`, Windows `Ctrl`+`Shift`+`J`)을 열고 아래 한 줄을 실행합니다. 그룹웨어 화면은 현재 세션(`auth_a_token`, `hash_key`, `ucUserInfo`, `erpUserInfo`)을 `sessionStorage.userInfo`에 보관하고 모든 요청을 이 값으로 서명하므로, 항상 화면이 쓰는 최신 세션이 복사됩니다. 값은 화면에 출력되지 않고 클립보드로만 갑니다.
 
    ```js
    copy(sessionStorage.userInfo ?? ''); sessionStorage.userInfo ? '복사 완료' : '로그인 정보 없음'
@@ -55,18 +62,18 @@ brew install poppler
 4. 아래 명령을 실행합니다. 세션 객체 자체(`sessionStorage.userInfo`)와 `resultData.sessionInfo`로 감싼 로그인 응답을 모두 받습니다.
 
 ```sh
-python3 expense.py auth --clipboard
-python3 expense.py auth --status
+uv run expense.py auth --clipboard
+uv run expense.py auth --status
 ```
 
-CLI는 정상 세션의 유효성을 확인한 뒤 `~/.config/mysc-expense/session.json`에 권한 600으로 저장합니다. 복사한 내용이 바뀌지 않았으면 클립보드도 비웁니다. Linux는 숨김 입력인 `python3 expense.py auth` 또는 신뢰할 수 있는 로컬 입력의 `auth --stdin`을 사용합니다.
+CLI는 정상 세션의 유효성을 확인한 뒤 `~/.config/mysc-expense/session.json`(Windows는 `%USERPROFILE%\.config\mysc-expense\session.json`)에 권한 600으로 저장합니다. 복사한 내용이 바뀌지 않았으면 클립보드도 비웁니다. macOS·Windows는 클립보드를 쓰고, Linux는 숨김 입력인 `uv run expense.py auth` 또는 신뢰할 수 있는 로컬 입력의 `auth --stdin`을 사용합니다.
 
 `auth --status`는 인증 성공 여부와 사원·부서만 출력합니다. 만료·로그아웃·권한 오류가 나오면 정상 로그인 후 다시 가져옵니다. 자동 로그인이나 별도의 토큰 발급 서버는 구현하지 않았습니다. 원본 키를 코드에 넣지 말고, 노출한 세션은 로그아웃 등으로 폐기 후 다시 로그인합니다. `.env`·세션·개인 프로필을 커밋하지 않습니다.
 
 ## 개인 프로필
 
 ```sh
-python3 expense.py profile \
+uv run expense.py profile \
   --card '그룹웨어에 표시되는 정확한 카드 이름' \
   --project '본인 기본 프로젝트 코드' \
   --out .expense-state/me.profile.json
@@ -81,13 +88,13 @@ python3 expense.py profile \
 ## 매달: PDF와 사용월로 초안 만들기
 
 ```sh
-python3 expense.py prepare \
+uv run expense.py prepare \
   --month 2026-09 \
   --pdf '/실제/경로/현대카드.pdf' \
   --profile .expense-state/me.profile.json \
   --out .expense-state/september.plan.json
 
-python3 expense.py inspect .expense-state/september.plan.json
+uv run expense.py inspect .expense-state/september.plan.json
 ```
 
 `prepare`는 카드·영수증·최근 183일 승인 이력·현재 프로젝트/용도 목록을 조회합니다. 명세서 열 제목을 찾아 날짜·가맹점·원화 청구액·통화를 추출하고, PDF의 총 건수·총액과 독립적으로 대조합니다. 검토 JSON과 `.review.html`을 권한 600으로 생성합니다. 이미 처리한 거래는 본인 저장 기록과 실제 문서 상태로 확인합니다.
@@ -110,10 +117,10 @@ python3 expense.py inspect .expense-state/september.plan.json
 
 ```sh
 # 해당 거래의 승인 시각·금액과 같은 가맹점의 과거 승인 적요·용도·프로젝트
-python3 expense.py context .expense-state/september.plan.json --row 1
+uv run expense.py context .expense-state/september.plan.json --row 1
 
 # 가맹점 이름이 달라도 본인·같은 카드의 관련 승인 이력 검색
-python3 expense.py context .expense-state/september.plan.json --row 1 --query 택시
+uv run expense.py context .expense-state/september.plan.json --row 1 --query 택시
 ```
 
 `--query`는 사업자등록번호·가맹점명 완전일치를 건너뛰고 가맹점명과 적요를 부분검색합니다. 회사·카드 일치 조건은 그대로 적용됩니다. 실측으로 `Amazon web services`는 0건에서 14건, `FLY.IO`는 0건에서 3건으로 복구됐습니다.
@@ -124,23 +131,23 @@ python3 expense.py context .expense-state/september.plan.json --row 1 --query �
 
 ```sh
 # 이번 건의 검토 결과 또는 사용자 답변을 반영. 같은 값을 지정해도 검토 완료로 기록됨.
-python3 expense.py edit .expense-state/september.plan.json --row 1 \
+uv run expense.py edit .expense-state/september.plan.json --row 1 \
   --set 'description=사용자가 확인한 실제 업무 목적' \
   --set purpose=확인한용도코드 --set project=확인한프로젝트코드 \
   --out .expense-state/september-edited.plan.json
 
 # 모호한 명세서 거래와 카드 원본을 사용자가 확인한 경우
-python3 expense.py match .expense-state/september-edited.plan.json \
+uv run expense.py match .expense-state/september-edited.plan.json \
   --charge p1r3 --row 3 --reason '명세서 가맹점과 원본 영수증 대조 후 사용자 확인' \
   --out .expense-state/september-matched.plan.json
 
 # 이번 명세서에 없는 거래를 제외하기로 확인한 경우
-python3 expense.py exclude .expense-state/september-matched.plan.json --row 9 \
+uv run expense.py exclude .expense-state/september-matched.plan.json --row 9 \
   --reason '사용자가 확인한 이번 결의 제외 사유' \
   --out .expense-state/september-reviewed.plan.json
 
-python3 expense.py inspect .expense-state/september-reviewed.plan.json
-python3 expense.py review .expense-state/september-reviewed.plan.json \
+uv run expense.py inspect .expense-state/september-reviewed.plan.json
+uv run expense.py review .expense-state/september-reviewed.plan.json \
   --out .expense-state/september-reviewed.review.html
 ```
 
@@ -153,7 +160,7 @@ python3 expense.py review .expense-state/september-reviewed.plan.json \
 이번 답변을 다음 달에도 적용하기로 사용자가 결정한 경우에만 실행합니다. `edit`, `match`, `exclude`는 프로필을 수정하지 않습니다.
 
 ```sh
-python3 expense.py rule .expense-state/me.profile.json \
+uv run expense.py rule .expense-state/me.profile.json \
   --merchant '확인한 그룹웨어 가맹점명' \
   --description '앞으로도 적용할 적요' --purpose 확인한용도코드 \
   --project 확인한프로젝트코드 \
@@ -166,9 +173,9 @@ python3 expense.py rule .expense-state/me.profile.json \
 ## 검증 후 임시보관
 
 ```sh
-python3 expense.py check .expense-state/september-reviewed.plan.json
-python3 expense.py draft .expense-state/september-reviewed.plan.json
-python3 expense.py status --verify
+uv run expense.py check .expense-state/september-reviewed.plan.json
+uv run expense.py draft .expense-state/september-reviewed.plan.json
+uv run expense.py status --verify
 ```
 
 `prepare`로 만든 검토안의 PDF는 `draft`에서 자동 첨부합니다. 기존 `preview` 방식의 검토안에는 필요하면 `draft --pdf /경로/근거.pdf`를 사용합니다. 현재 금액 수정 허용 설정, 마감일, 원본 잔액, 프로젝트·용도, 다른 메뉴 반영 여부와 카드 권한을 다시 확인합니다. 본문은 그룹웨어 양식 1211과 원본 영수증 링크로 생성합니다.
@@ -178,8 +185,8 @@ python3 expense.py status --verify
 ## 중단·재실행
 
 ```sh
-python3 expense.py status
-python3 expense.py resume '/status에 표시된/작업기록.json'
+uv run expense.py status
+uv run expense.py resume '/status에 표시된/작업기록.json'
 ```
 
 작업 기록은 `~/.config/mysc-expense/drafts/`에 저장합니다. `status`의 기본 상태는 마지막 로컬 기록이며, `--verify`의 `serverChecked`와 `error`로 현재 서버 확인 결과를 구분합니다.
@@ -196,12 +203,12 @@ python3 expense.py resume '/status에 표시된/작업기록.json'
 `taxinvoice.py`는 전자세금계산서·전자계산서 PDF로 양식 1210 지출결의를 임시보관합니다. 연결키 발급·ERP 저장·전자결재 임시보관·재조회와 중단·재개 규칙은 `expense.py`와 같습니다.
 
 ```sh
-python3 taxinvoice.py read 세금계산서.pdf                      # 읽기만
-python3 taxinvoice.py prepare --pdf 세금계산서.pdf [--pdf 2장째.pdf] \
+uv run taxinvoice.py read 세금계산서.pdf                      # 읽기만
+uv run taxinvoice.py prepare --pdf 세금계산서.pdf [--pdf 2장째.pdf] \
   [--attach 카드이용내역.pdf] --out ~/.config/mysc-expense/state/tax-2026-09-a01.plan.json
-python3 taxinvoice.py check  <plan>                            # 저장 전 재검증
-python3 taxinvoice.py draft  <plan>                            # 임시보관
-python3 taxinvoice.py status --verify
+uv run taxinvoice.py check  <plan>                            # 저장 전 재검증
+uv run taxinvoice.py draft  <plan>                            # 임시보관
+uv run taxinvoice.py status --verify
 ```
 
 - **방식**: `[영수]`는 이미 결제한 건의 인식용(출금계좌 비움, 회사 계좌 수취, 결제일·승인번호 비고), `[청구]`는 지급요청(출금계좌 필수, 같은 거래처 계좌 수취)입니다. `--mode`로 바꿀 수 있습니다.
@@ -210,18 +217,18 @@ python3 taxinvoice.py status --verify
 - **결제 짝**: 인식용이면 작성일부터 31일 안의 미반영 카드 거래 중 합계가 같은 것을 찾습니다. 카드 거래는 카드 결의에서 빼지 않습니다.
 - **범위 밖**: 수정세금계산서·음수 금액, 표준 서식이 아닌 PDF·스캔본, 원천징수 대상 외부인건비, 예산통제 용도, 수취 계좌 이력이 없는 첫 거래.
 - 작업 기록은 `~/.config/mysc-expense/tax-drafts/`에 승인번호 기준으로 저장해 같은 세금계산서를 두 번 저장하지 않습니다.
-- `python3 test_taxinvoice.py`는 가상 세금계산서로 읽기·검토안·본문·저장 재개를 검증합니다. 본문 생성은 승인된 실제 문서(2026-05)의 바인딩 데이터로 재현해 저장된 본문과 텍스트가 일치함을 별도로 확인했습니다.
+- `uv run test_taxinvoice.py`는 가상 세금계산서로 읽기·검토안·본문·저장 재개를 검증합니다. 본문 생성은 승인된 실제 문서(2026-05)의 바인딩 데이터로 재현해 저장된 본문과 텍스트가 일치함을 별도로 확인했습니다.
 
 ## 그룹웨어 조회 API (`amaranth.py`)
 
 열람 권한이 있는 전자결재 문서를 찾고 읽는 조회 전용 계층입니다. Claude 스킬과 GPT 함수 호출이 같은 카탈로그를 씁니다.
 
 ```sh
-python3 amaranth.py browser    # 분리된 프로필의 연결용 Chrome 창 (로그인은 사용자가)
-python3 amaranth.py login      # 그 창의 로그인 세션을 저장 (expense.py와 공유)
-python3 amaranth.py ops        # 조회 작업 목록
-python3 amaranth.py call document_search '{"doc_no": "MYSC-2025-4940"}'
-python3 amaranth.py tools --format openai   # GPT 함수 정의
+uv run amaranth.py browser    # 분리된 프로필의 연결용 Chrome 창 (로그인은 사용자가)
+uv run amaranth.py login      # 그 창의 로그인 세션을 저장 (expense.py와 공유)
+uv run amaranth.py ops        # 조회 작업 목록
+uv run amaranth.py call document_search '{"doc_no": "MYSC-2025-4940"}'
+uv run amaranth.py tools --format openai   # GPT 함수 정의
 ```
 
 - 출력은 주민등록번호·계좌번호를 가립니다. 카탈로그 밖 경로(저장·읽음 처리 등)는 호출하지 않습니다.
@@ -230,9 +237,9 @@ python3 amaranth.py tools --format openai   # GPT 함수 정의
 ## 검증과 현재 범위
 
 ```sh
-python3 test_amaranth.py
-python3 test_expense.py
-python3 test_expense.py /비공개/실제.plan.json /비공개/신규양식조회.json /비공개/저장기록.json
+uv run test_amaranth.py
+uv run test_expense.py
+uv run test_expense.py /비공개/실제.plan.json /비공개/신규양식조회.json /비공개/저장기록.json
 ```
 
 비공개 원본 PDF로 건수·총액 추출, 해외 거래 청구액 수정안, 모호한 연결 질문, 적요 규칙과 일회성 확인 분리를 검증했습니다. 비공개 저장 문서 데이터로 단계별 중단·재개와 저장 후 오류 응답을 재현하여 중복 쓰기 방지를 검증했습니다. 이 재현은 메모리 클라이언트이며 서버에 새로 저장하지 않습니다. 원본 PDF·개인 프로필·실제 거래·저장 기록은 저장소에 포함하지 않습니다.

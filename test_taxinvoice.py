@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# ///
 """실행: python3 test_taxinvoice.py  (네트워크·실제 PDF 없음)"""
 import copy
 import json

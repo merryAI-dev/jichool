@@ -5,8 +5,8 @@ Claude는 `SKILL.md`를 따라 `amaranth.py`를 직접 실행한다. GPT나 다�
 1. 도구 정의: [`tools/openai-tools.json`](tools/openai-tools.json) (Claude API용은 `tools/anthropic-tools.json`). 카탈로그를 바꾸면 다시 생성한다.
 
    ```sh
-   python3 amaranth.py tools --format openai > tools/openai-tools.json
-   python3 amaranth.py tools --format anthropic > tools/anthropic-tools.json
+   uv run amaranth.py tools --format openai > tools/openai-tools.json
+   uv run amaranth.py tools --format anthropic > tools/anthropic-tools.json
    ```
 
 2. 실행기: 모델이 부른 함수 이름·인자를 그대로 넘긴다. 결과는 주민번호·계좌번호가 가려진 JSON이다.
@@ -14,12 +14,12 @@ Claude는 `SKILL.md`를 따라 `amaranth.py`를 직접 실행한다. GPT나 다�
    ```python
    import json, subprocess
    def run_tool(name, arguments):
-       out = subprocess.run(["python3", "amaranth.py", "call", name, json.dumps(arguments)],
+       out = subprocess.run(["uv", "run", "amaranth.py", "call", name, json.dumps(arguments)],
                             capture_output=True, text=True)
        return out.stdout if out.returncode == 0 else json.dumps({"error": out.stderr.strip()})
    ```
 
-3. 연결: 같은 컴퓨터에서 `python3 amaranth.py browser` → 열린 창에서 사용자가 로그인 → `python3 amaranth.py login`.
+3. 연결: 같은 컴퓨터에서 `uv run amaranth.py browser` → 열린 창에서 사용자가 로그인 → `uv run amaranth.py login`.
 
 ## 시스템 지시에 넣을 것
 

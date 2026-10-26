@@ -4,9 +4,9 @@ import hashlib
 from pathlib import Path
 import re
 import statistics
-import subprocess
 import unicodedata
-import xml.etree.ElementTree as ET
+
+import pdftext
 
 
 class StatementError(ValueError):
@@ -36,18 +36,12 @@ def read_statement(path, month):
         raise StatementError("PDF 파일과 YYYY-MM 형식의 사용월을 지정하세요.")
     dt.datetime.strptime(month, "%Y-%m")
     try:
-        output = subprocess.run(["pdftotext", "-bbox", str(path), "-"], capture_output=True, check=True, timeout=30)
-        root = ET.fromstring(output.stdout)
-    except FileNotFoundError:
-        raise StatementError("pdftotext가 필요합니다. macOS: brew install poppler") from None
-    except (subprocess.SubprocessError, ET.ParseError):
-        raise StatementError("PDF 텍스트를 읽지 못했습니다. 암호·손상·스캔 여부를 확인하세요.") from None
-    ns = {"x": "http://www.w3.org/1999/xhtml"}
+        document = pdftext.pages(path)
+    except pdftext.PdfTextError as error:
+        raise StatementError(str(error)) from None
     charges, summaries = [], []
-    for page_no, page in enumerate(root.findall(".//x:page", ns), 1):
-        words = [{"text": unicodedata.normalize("NFKC", word.text or ""),
-                  **{key: float(word.get(key)) for key in ("xMin", "xMax", "yMin", "yMax")}}
-                 for word in page.findall("x:word", ns)]
+    for page_no, page in enumerate(document, 1):
+        words = [{**word, "text": unicodedata.normalize("NFKC", word["text"])} for word in page]
         headers = {}
         for name in ("이용일", "가맹점", "할부개월", "청구회차", "청구금액"):
             found = [w for w in words if w["text"] == name]

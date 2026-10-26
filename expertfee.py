@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""MYSC 전문가 활용비(외부인건비, 원천징수) 지출결의 CLI. Python 표준 라이브러리만 사용한다.
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# ///
+"""MYSC 전문가 활용비(외부인건비, 원천징수) 지출결의 CLI. PDF 읽기(pypdfium2)·사진 변환(Pillow) 외에는 Python 표준 라이브러리만 사용한다.
 
 흐름은 법인카드·세금계산서와 같다: 서류 판독 → 검토안(prepare) → 질문 해소 → check → 사용자 확인 → draft.
 - 1210 지출결의: 한 사람당 한 행. 계정 0300 기타소득지급수수료(8.8%) 또는 0290 사업소득지급수수료(3.3%), 증빙 기타.
@@ -13,7 +17,6 @@
 
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -24,6 +27,7 @@ import subprocess
 import sys
 
 import expense as ex
+import pdftext
 import taxinvoice as tx
 from expense import API, CONFIG, Client, ExpenseError, date_value, read_private, won, write_private
 
@@ -42,7 +46,6 @@ DRAFTS = CONFIG / "expert-drafts"
 # 실제 1212 문서(MYSC-2026-4112 등)의 수취 계좌 801…641·예금주 (주)엠와이소셜컴퍼니와 일치.
 OPERATING = {"bankCd": "040", "bankNm": "국민", "account": "80173704008641", "holder": "(주)엠와이소셜컴퍼니"}
 TRANSFER_CASH = "0360"   # 1212 양식 용도: 보통예금
-CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 FILES = CONFIG / "state" / "expertfee-files"
 
 
@@ -80,8 +83,8 @@ def read_confirmation(path):
     if path.suffix.lower() != ".pdf":
         return None
     try:
-        text = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True, check=True).stdout.decode("utf-8", "replace")
-    except (FileNotFoundError, subprocess.CalledProcessError):
+        text = pdftext.layout_text(path)
+    except pdftext.PdfTextError:
         return None
     return parse_confirmation(text)
 
@@ -159,7 +162,14 @@ NAME_STOPWORDS = {word for words in DOC_KEYWORDS.values() for word in words} | {
 
 
 def to_jpeg(source, target):
-    """PNG·HEIC 같은 사진을 macOS 기본 도구(sips)로 JPEG로 바꾼다."""
+    """PNG 같은 사진을 JPEG로 바꾼다. Pillow가 먼저, HEIC처럼 Pillow가 못 여는 것은 macOS 기본 도구(sips)로."""
+    try:
+        from PIL import Image
+        with Image.open(source) as image:
+            image.convert("RGB").save(target, "JPEG", quality=92)
+        return Path(target)
+    except Exception:  # Pillow 없음·미지원 형식(HEIC 등)
+        pass
     try:
         subprocess.run(["sips", "-s", "format", "jpeg", str(source), "--out", str(target)], capture_output=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
@@ -477,7 +487,7 @@ def build_plan(spec, workdir):
 
 
 def tax_calc_pdf(spec, payments, target):
-    """첨부 '0. 원천세 계산': 사람별 총지급액·소득유형·소득세·지방소득세·원천세·실지급액 표. Chrome으로 PDF 인쇄."""
+    """첨부 '0. 원천세 계산': 사람별 총지급액·소득유형·소득세·지방소득세·원천세·실지급액 표. Chrome·Edge로 PDF 인쇄."""
     import html as _html
     rows = "".join(
         f"<tr><td>{i}</td><td>{_html.escape(p['name'])}</td><td>{INCOME[p['incomeType']]['label']} {INCOME[p['incomeType']]['rate']}</td>"
@@ -485,7 +495,7 @@ def tax_calc_pdf(spec, payments, target):
         for i, p in enumerate(payments, 1))
     total = {k: sum(p[k] for p in payments) for k in ("gross", "incomeTax", "localTax", "tax", "net")}
     page = f"""<!doctype html><meta charset="utf-8"><style>
-body{{font-family:'Apple SD Gothic Neo',sans-serif;margin:32px;font-size:12px}} h1{{font-size:16px}}
+body{{font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;margin:32px;font-size:12px}} h1{{font-size:16px}}
 table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #999;padding:6px 8px;text-align:right}}
 td:nth-child(2),td:nth-child(3),th{{text-align:center}} tfoot td{{font-weight:bold;background:#f3f3f3}}
 p{{color:#444;line-height:1.6}}</style>
@@ -499,10 +509,10 @@ p{{color:#444;line-height:1.6}}</style>
     source = Path(target).with_suffix(".html")
     source.write_text(page, encoding="utf-8")
     try:
-        subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+        subprocess.run([ex.browser_path(), "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                         f"--print-to-pdf={target}", source.as_uri()], capture_output=True, check=True, timeout=60)
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        raise ExpenseError("원천세 계산표 PDF를 만들지 못했습니다(Chrome 필요).") from None
+        raise ExpenseError("원천세 계산표 PDF를 만들지 못했습니다(Chrome 또는 Edge 필요).") from None
     finally:
         source.unlink(missing_ok=True)
     if not Path(target).exists() or not Path(target).read_bytes().startswith(b"%PDF-"):
@@ -875,7 +885,7 @@ def tax_command(args):
 
 
 def prepare_command(args):
-    spec = json.loads(Path(args.spec).expanduser().read_text())
+    spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
     FILES.mkdir(mode=0o700, parents=True, exist_ok=True)
     plan = build_plan(spec, FILES)
     context = gather(Client(), spec)
@@ -913,8 +923,7 @@ def draft_command(args):
             raise ExpenseError("이 검토안에는 원천세 이체(1212)가 없습니다(운영비 계좌 지급이거나 원천세 0원).")
     DRAFTS.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = DRAFTS / (journal_key(plan) + ".json")
-    with (DRAFTS / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ex.exclusive(DRAFTS / ".lock"):
         if path.exists():
             journal = read_private(path)
             if journal["plan"] != plan:

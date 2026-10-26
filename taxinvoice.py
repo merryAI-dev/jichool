@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""MYSC 세금계산서·계산서 지출결의(양식 1210) CLI. Python 표준 라이브러리만 사용한다.
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30"]
+# ///
+"""MYSC 세금계산서·계산서 지출결의(양식 1210) CLI. PDF 읽기(pypdfium2) 외에는 Python 표준 라이브러리만 사용한다.
 
 - 인식용(recognition): [영수] 증빙. 법인카드·이체로 이미 결제했고 회계 인식만 필요한 건.
 - 지급요청(payment): [청구] 증빙. 회사가 거래처 계좌로 지급해야 하는 건.
@@ -7,7 +11,6 @@
 
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import html
 import json
@@ -19,6 +22,7 @@ import sys
 import urllib.parse
 
 import expense as ex
+import pdftext
 from expense import API, CONFIG, Client, ExpenseError, date_value, read_private, won, write_private
 
 
@@ -118,10 +122,9 @@ def read_invoice(path):
     if not raw.startswith(b"%PDF-"):
         raise ExpenseError(f"PDF 파일이 아닙니다: {path.name}")
     try:
-        text = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True,
-                              check=True).stdout.decode("utf-8", "replace")
-    except FileNotFoundError:
-        raise ExpenseError("PDF를 읽으려면 pdftotext가 필요합니다. (brew install poppler)") from None
+        text = pdftext.layout_text(path)
+    except pdftext.PdfTextError as error:
+        raise ExpenseError(f"{path.name}: {error}") from None
     if not text.strip():
         raise ExpenseError(f"글자를 읽을 수 없는 PDF입니다(스캔본 등): {path.name}")
     try:
@@ -686,8 +689,7 @@ def draft(args):
     DRAFTS.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = DRAFTS / (journal_key(plan) + ".json")
     approvals = {invoice["approval"] for invoice in plan["invoices"]}
-    with (DRAFTS / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ex.exclusive(DRAFTS / ".lock"):
         if path.exists():
             journal = read_private(path)
             if journal["plan"] != plan:
@@ -710,8 +712,7 @@ def retire_command(args):
     path = Path(args.journal).expanduser().resolve()
     if path.parent != DRAFTS.resolve():
         raise ExpenseError("세금계산서 작업 기록 폴더 안의 JSON을 지정하세요.")
-    with (DRAFTS / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ex.exclusive(DRAFTS / ".lock"):
         journal = read_private(path)
         head = journal["plan"]["head"]
         if str(head["coCd"]) != str(client.erp["companyCode"]) or str(head["empCd"]) != str(client.erp["userCode"]):

@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# ///
 """실행: python3 test_expertfee.py  (네트워크 없음, 가상 서류·가상 그룹웨어 값)"""
 import json
 from pathlib import Path

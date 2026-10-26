@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 """MYSC 그룹웨어(Amaranth 10) 조회 API 계층. Python 표준 라이브러리만 사용한다.
 
 Claude 스킬과 GPT 함수 호출이 같은 카탈로그(OPS)를 쓴다.
@@ -26,13 +30,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from expense import (API, CONFIG, ORIGIN, SESSION, ExpenseError, read_private, session_from_user_info,
-                     signed_headers, write_private)
+from expense import (API, CONFIG, ORIGIN, SESSION, WINDOWS, ExpenseError, browser_path, read_private,
+                     session_from_user_info, signed_headers, write_private)
 
 
 CDP_DEFAULT = "http://127.0.0.1:9222"
 BROWSER_PROFILE = CONFIG / "browser-profile"
-CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 RRN = re.compile(r"(?<!\d)\d{6}\s*-?\s*[1-8]\d{6}(?!\d)")
 ACCOUNT = re.compile(r"(?<![\d-])(?:\d{2,6}-){2,3}\d{2,8}(?![\d-])|(?<!\d)\d{10,16}(?!\d)")
 
@@ -346,14 +349,13 @@ def login_command(args):
 
 
 def browser_command(args):
-    """사용자 Chrome과 분리된 프로필로 디버그 창을 연다. 로그인은 사용자가 직접 한다."""
-    if not Path(CHROME).exists():
-        raise ExpenseError("Google Chrome을 찾을 수 없습니다.")
+    """사용자 Chrome·Edge와 분리된 프로필로 디버그 창을 연다. 로그인은 사용자가 직접 한다."""
+    browser = browser_path()
     BROWSER_PROFILE.mkdir(mode=0o700, parents=True, exist_ok=True)
     port = urllib.parse.urlparse(args.cdp).port or 9222
-    subprocess.Popen([CHROME, f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1",
+    subprocess.Popen([browser, f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1",
                       f"--user-data-dir={BROWSER_PROFILE}", "--no-first-run", "--no-default-browser-check", ORIGIN],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=not WINDOWS)
     print(f"디버그 브라우저를 열었습니다(포트 {port}). 그 창에서 그룹웨어에 로그인한 뒤 login을 실행하세요.")
 
 

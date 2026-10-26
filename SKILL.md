@@ -34,18 +34,23 @@ allowed-tools: Bash, Read, AskUserQuestion
 매번 처음부터 묻지 말고 **먼저 조용히 상태를 확인**한 다음, 빠진 것만 안내한다.
 
 ```sh
-python3 --version; pdftotext -v; ls ~/.config/mysc-expense/state/*.profile.json
-python3 "$SKILL_DIR/expense.py" auth --status
+uv --version; ls ~/.config/mysc-expense/state/*.profile.json
+uv run "$SKILL_DIR/expense.py" auth --status
 ```
 
 전부 통과하면 온보딩을 건너뛰고 바로 [매달 하는 일](#매달-하는-일)로 간다.
 
 ## 1단계: 실행 환경
 
-`python3`가 3.10 미만이거나 `pdftotext`가 없으면 내가 처리한다.
+필요한 건 **uv 하나**다. uv가 Python과 PDF 패키지(pypdfium2·Pillow)를 첫 실행 때 몇 초 만에 받아 둔다. Homebrew·Poppler·WSL은 쓰지 않는다.
 
-- `pdftotext` 없음 → `brew install poppler`를 **내가 실행**한다. 사용자에게는 "PDF 읽는 도구가 없어서 지금 설치할게요. 2~3분 걸려요"라고만 말한다.
-- `brew`도 없으면 그때는 사용자에게 알린다: "이건 제가 설치할 수 없어서 AXR팀 도움이 필요해요. Homebrew 설치가 필요하다고 전해주세요."
+- `uv` 없음 → **내가 설치한다.** 사용자에게는 "실행 도구를 설치할게요. 10초쯤 걸려요"라고만 말한다.
+  - macOS·Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - Windows(PowerShell): `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+  - 설치 직후 같은 셸에서 `uv`가 안 잡히면 `~/.local/bin/uv`(Windows `%USERPROFILE%\.local\bin\uv.exe`)를 직접 쓴다.
+- 회사 보안 정책으로 설치가 막히면 그때 사용자에게 알린다: "실행 도구(uv) 설치가 막혀 있어서 AXR팀 도움이 필요해요."
+- 모든 명령은 `python3 …`가 아니라 `uv run …`으로 실행한다. 스크립트 첫머리에 필요한 Python·패키지가 적혀 있다.
+- Windows도 같은 명령으로 동작한다. 연결용 창·원천세 계산표에는 Chrome, 없으면 Edge를 쓴다.
 
 ## 2단계: 그룹웨어 연결 — **가장 조심스럽게**
 
@@ -64,8 +69,8 @@ Network 탭에서 로그인 응답을 찾는 방식은 쓰지 않는다. 기록�
 평소 Chrome과 분리된 **연결용 창**을 내가 열고, 사용자는 그 창에서 그룹웨어에 로그인만 한다. 그 뒤로는 내가 그 창의 로그인 정보를 직접 읽어 온다(Console 복사 불필요). 창의 로그인은 저장된 프로필이라 다음 날에도 그 창이 열려 있으면 `login`만 다시 하면 된다.
 
 ```sh
-python3 "$SKILL_DIR/amaranth.py" browser   # 연결용 창 열기 (이미 열려 있으면 생략)
-python3 "$SKILL_DIR/amaranth.py" login     # 그 창의 로그인 정보로 연결
+uv run "$SKILL_DIR/amaranth.py" browser   # 연결용 창 열기 (이미 열려 있으면 생략)
+uv run "$SKILL_DIR/amaranth.py" login     # 그 창의 로그인 정보로 연결
 ```
 
 > 그룹웨어 연결용 창을 하나 열었어요. 그 창에서 평소처럼 로그인만 해주세요. 비밀번호는 제가 보거나 저장하지 않아요. 로그인되면 알려주세요.
@@ -109,7 +114,7 @@ python3 "$SKILL_DIR/amaranth.py" login     # 그 창의 로그인 정보로 연�
 그 다음 내가 실행한다.
 
 ```sh
-python3 "$SKILL_DIR/expense.py" auth --clipboard
+uv run "$SKILL_DIR/expense.py" auth --clipboard
 ```
 
 macOS 전용이다. Linux면 `auth`(숨김 입력)를 사용자가 직접 실행하도록 안내한다.
@@ -133,7 +138,7 @@ Console 화면 캡처는 받아도 된다(복사 코드는 값을 화면에 출�
 - **기본 프로젝트** — "평소 제일 많이 쓰시는 프로젝트가 있을까요? 없으면 없다고 하셔도 돼요."
 
 ```sh
-python3 "$SKILL_DIR/expense.py" profile --card '<카드 이름>' --project '<프로젝트 코드>' \
+uv run "$SKILL_DIR/expense.py" profile --card '<카드 이름>' --project '<프로젝트 코드>' \
   --out ~/.config/mysc-expense/state/me.profile.json
 ```
 
@@ -184,7 +189,7 @@ python3 "$SKILL_DIR/expense.py" profile --card '<카드 이름>' --project '<프
 > 현대카드에서 받으신 명세서 PDF 파일을 이 창에 끌어다 놓거나, 파일 위치를 알려주세요. (카드사에서 내려받은 원본이어야 해요. 스캔본은 아직 못 읽어요)
 
 ```sh
-python3 "$SKILL_DIR/expense.py" prepare --month 2026-09 --pdf '<경로>' \
+uv run "$SKILL_DIR/expense.py" prepare --month 2026-09 --pdf '<경로>' \
   --profile ~/.config/mysc-expense/state/me.profile.json \
   --out ~/.config/mysc-expense/state/2026-09.plan.json
 ```
@@ -201,7 +206,7 @@ python3 "$SKILL_DIR/expense.py" prepare --month 2026-09 --pdf '<경로>' \
 - **지급요청일 = 오늘** (`today`, 실행 시점 한국시간)
 
 ```sh
-python3 "$SKILL_DIR/expense.py" dates <plan> --accounting-date month-end --pay-date today --out <새-plan>
+uv run "$SKILL_DIR/expense.py" dates <plan> --accounting-date month-end --pay-date today --out <새-plan>
 ```
 
 프로필에 이 규칙이 `{"accounting": "month-end", "payment": "today"}`로 고정 저장되어 있고, 다른 값이면 프로필 검증에서 오류가 난다. 즉 선택의 여지가 없는 값이다.
@@ -227,7 +232,7 @@ python3 "$SKILL_DIR/expense.py" dates <plan> --accounting-date month-end --pay-d
 - 프로젝트를 EXR-경비 또는 EXDC로 **필수 변경**해야 하는 항목이 따로 있다
 
 ```sh
-python3 "$SKILL_DIR/expense.py" inspect <plan>
+uv run "$SKILL_DIR/expense.py" inspect <plan>
 ```
 
 `questions`가 빌 때까지 반복한다.
@@ -302,10 +307,10 @@ python3 "$SKILL_DIR/expense.py" inspect <plan>
 ## 3. 검토 화면과 저장
 
 ```sh
-python3 "$SKILL_DIR/expense.py" review <plan> --out <plan>.review.html
-python3 "$SKILL_DIR/expense.py" check <plan>
-python3 "$SKILL_DIR/expense.py" draft <plan>
-python3 "$SKILL_DIR/expense.py" status --verify
+uv run "$SKILL_DIR/expense.py" review <plan> --out <plan>.review.html
+uv run "$SKILL_DIR/expense.py" check <plan>
+uv run "$SKILL_DIR/expense.py" draft <plan>
+uv run "$SKILL_DIR/expense.py" status --verify
 ```
 
 검토 화면은 파일로 전달해 **눈으로 확인받는다**: "최종 확인용 화면 만들었어요. 열어보시고 이상 없으면 알려주세요."
@@ -331,8 +336,8 @@ PDF 없이 `preview`로 저장했으면 `statementCount`/`statementTotal`이 비
 ## 4. 중단·재개
 
 ```sh
-python3 "$SKILL_DIR/expense.py" status
-python3 "$SKILL_DIR/expense.py" resume '<기록.json>'
+uv run "$SKILL_DIR/expense.py" status
+uv run "$SKILL_DIR/expense.py" resume '<기록.json>'
 ```
 
 - 중복이 걱정돼도 **기록을 지우고 다시 하지 않는다.** 항상 `status --verify`로 서버를 먼저 확인한다.
@@ -345,7 +350,7 @@ python3 "$SKILL_DIR/expense.py" resume '<기록.json>'
 이번 달 답변은 이번 달에만 적용된다. "앞으로도 계속 이렇게 해줘"라고 **명시적으로** 말한 경우에만:
 
 ```sh
-python3 "$SKILL_DIR/expense.py" rule <profile> --merchant '<가맹점명>' \
+uv run "$SKILL_DIR/expense.py" rule <profile> --merchant '<가맹점명>' \
   --description '<앞으로 적용할 적요>' --purpose <용도코드> --project <프로젝트코드> \
   --statement-merchant '<명세서상 이름>' --out <새-profile>
 ```
@@ -374,18 +379,18 @@ python3 "$SKILL_DIR/expense.py" rule <profile> --merchant '<가맹점명>' \
 
 ```sh
 # 읽기만 (네트워크 없음) — 증빙 종류·승인번호·작성일자·금액·상호
-python3 "$SKILL_DIR/taxinvoice.py" read '<PDF>' ['<PDF2>' ...]
+uv run "$SKILL_DIR/taxinvoice.py" read '<PDF>' ['<PDF2>' ...]
 
 # 검토안 (조회만). 여러 장이면 --pdf 반복 → 한 문서 여러 행
-python3 "$SKILL_DIR/taxinvoice.py" prepare --pdf '<PDF>' [--attach '<카드 이용내역 PDF>'] \
+uv run "$SKILL_DIR/taxinvoice.py" prepare --pdf '<PDF>' [--attach '<카드 이용내역 PDF>'] \
   --out ~/.config/mysc-expense/state/tax-<YYYY-MM>-a01.plan.json
 #   선택: --mode --title --memo(행마다) --purpose --project --accounting-date --pay-date
 #         --paid-date(행마다) --paid-by card|transfer --note(줄마다, 기본 비고 대체) --withdraw(줄마다)
 
-python3 "$SKILL_DIR/taxinvoice.py" check <plan>    # 저장 전 재검증 (쓰기 없음)
-python3 "$SKILL_DIR/taxinvoice.py" draft <plan>    # 임시보관 + ERP·본문·첨부 재조회
-python3 "$SKILL_DIR/taxinvoice.py" status --verify # 작업 기록 확인
-python3 "$SKILL_DIR/taxinvoice.py" retire <journal> # 사용자가 그룹웨어에서 삭제한 문서의 기록 보관(삭제 확인 후)
+uv run "$SKILL_DIR/taxinvoice.py" check <plan>    # 저장 전 재검증 (쓰기 없음)
+uv run "$SKILL_DIR/taxinvoice.py" draft <plan>    # 임시보관 + ERP·본문·첨부 재조회
+uv run "$SKILL_DIR/taxinvoice.py" status --verify # 작업 기록 확인
+uv run "$SKILL_DIR/taxinvoice.py" retire <journal> # 사용자가 그룹웨어에서 삭제한 문서의 기록 보관(삭제 확인 후)
 ```
 
 저장 후 검증이 실패하면 문서를 고치지 말고 무엇이 틀렸는지 알린 뒤, 사용자에게 임시보관함에서 삭제를 요청한다. 삭제되면 `retire` → 검토안 새로 생성 → `draft`.
@@ -422,13 +427,13 @@ python3 "$SKILL_DIR/taxinvoice.py" retire <journal> # 사용자가 그룹웨어�
 사용자가 "예전에 올린 ○○ 결의 찾아줘", "MYSC-2025-4940 내용 봐줘", "작년 심사비 어떻게 올렸지?"처럼 **과거 문서를 근거로 삼고 싶을 때** 쓴다. 다른 사람이 기안한 문서도 사용자에게 열람 권한(결재·참조·공개)이 있으면 나온다.
 
 ```sh
-python3 "$SKILL_DIR/amaranth.py" ops                                   # 가능한 조회 목록
-python3 "$SKILL_DIR/amaranth.py" call document_search '{"doc_no": "MYSC-2025-4940"}'
-python3 "$SKILL_DIR/amaranth.py" call document_search '{"title": "심사비", "date_from": "2025-01-01"}'
-python3 "$SKILL_DIR/amaranth.py" call document_view '{"doc_id": 105574}'
-python3 "$SKILL_DIR/amaranth.py" call document_boxes                   # 문서함 menuId (search의 box)
-python3 "$SKILL_DIR/amaranth.py" call expense_list '{"form_id": "1210"}'  # 내 ERP 결의 목록
-python3 "$SKILL_DIR/amaranth.py" call purpose_codes '{"form_id": 1210}'   # 용도 코드, deductFg 5 = 원천징수
+uv run "$SKILL_DIR/amaranth.py" ops                                   # 가능한 조회 목록
+uv run "$SKILL_DIR/amaranth.py" call document_search '{"doc_no": "MYSC-2025-4940"}'
+uv run "$SKILL_DIR/amaranth.py" call document_search '{"title": "심사비", "date_from": "2025-01-01"}'
+uv run "$SKILL_DIR/amaranth.py" call document_view '{"doc_id": 105574}'
+uv run "$SKILL_DIR/amaranth.py" call document_boxes                   # 문서함 menuId (search의 box)
+uv run "$SKILL_DIR/amaranth.py" call expense_list '{"form_id": "1210"}'  # 내 ERP 결의 목록
+uv run "$SKILL_DIR/amaranth.py" call purpose_codes '{"form_id": 1210}'   # 용도 코드, deductFg 5 = 원천징수
 ```
 
 - 출력은 **주민등록번호·계좌번호가 가려진 상태**다. 가린 값을 풀어서 보여주지 않는다. 원문이 꼭 필요한 처리는 `--raw-out`으로 사용자 전용 파일에만 저장하고 채팅에 옮기지 않는다.
@@ -463,7 +468,7 @@ python3 "$SKILL_DIR/amaranth.py" call purpose_codes '{"form_id": 1210}'   # 용�
 > 서류가 들어 있는 폴더를 알려주세요. 여러 곳이면 다 알려주셔도 돼요. (메일로 받으셨으면 첨부를 한 폴더에 저장해 주세요)
 
 ```sh
-python3 "$SKILL_DIR/expertfee.py" scan <폴더1> <폴더2> [--name 김승현 --name 김현준] --out ~/.config/mysc-expense/state/<이름>.scan.json
+uv run "$SKILL_DIR/expertfee.py" scan <폴더1> <폴더2> [--name 김승현 --name 김현준] --out ~/.config/mysc-expense/state/<이름>.scan.json
 ```
 이름을 미리 알면 `--name`을 준다(파일 이름 판단이 정확해진다). 영문 파일명(`Minjung Kal_CV.pdf`)은 `--alias "Minjung Kal=갈민정"`.
 - 한 파일에 서류가 합쳐져 있으면(`신분증, 통장사본_갈민정.pdf`) 두 서류로 모두 잡고, 첨부는 한 번만 `신분증, 통장 사본(이름)`으로 붙인다.
@@ -492,12 +497,12 @@ python3 "$SKILL_DIR/expertfee.py" scan <폴더1> <폴더2> [--name 김승현 --n
 - 회계일(기본 오늘), 사업명(program), 용도(purpose). 사람마다 용도가 다르면(서류 심사비·발표 심사비) 사람별 `purpose`.
 
 ```sh
-python3 "$SKILL_DIR/expertfee.py" projects [--keyword 핀테크]
+uv run "$SKILL_DIR/expertfee.py" projects [--keyword 핀테크]
 ```
 
 **⑤ 적요·제목 — 과거 사례로 초안을 쓰고, 제목은 따로 확인받는다**
 ```sh
-python3 "$SKILL_DIR/expertfee.py" examples 핀테크      # 같은 사업·용도의 과거 실제 제목·적요
+uv run "$SKILL_DIR/expertfee.py" examples 핀테크      # 같은 사업·용도의 과거 실제 제목·적요
 ```
 - 같은 사업 문서가 있으면 그 형식을 따른다. 없으면 2026 기본형: 적요 `{사업}_{용도}({이름})`, 제목 한 명은 적요와 같고 여러 명은 `{사업}_{용도}({첫 사람} 외 N인)`.
 - 사람별 적요 표를 보여주고 고칠 곳만 받는다 → `memoConfirmed: true`.
@@ -511,9 +516,9 @@ python3 "$SKILL_DIR/expertfee.py" examples 핀테크      # 같은 사업·용�
 
 **⑥ spec 만들기 → 검토안**
 ```sh
-python3 "$SKILL_DIR/expertfee.py" init --scan <scan.json> --out <spec.json> --program … --purpose … --project … --funding …
+uv run "$SKILL_DIR/expertfee.py" init --scan <scan.json> --out <spec.json> --program … --purpose … --project … --funding …
 # 판독·확인 값을 spec에 채운 뒤
-python3 "$SKILL_DIR/expertfee.py" prepare --spec <spec.json> --out <새 plan>
+uv run "$SKILL_DIR/expertfee.py" prepare --spec <spec.json> --out <새 plan>
 ```
 `확인필요`가 남으면 그것만 다시 묻는다. 검토표는 사람별 행(계정·적요·총지급액·원천세·실지급액·**은행과 전체 계좌번호**)·합계·출금계좌·비고·첨부 이름을 한 번에 보여준다.
 
@@ -527,10 +532,10 @@ python3 "$SKILL_DIR/expertfee.py" prepare --spec <spec.json> --out <새 plan>
 
 **⑧ "저장해줘"를 받은 뒤**
 ```sh
-python3 "$SKILL_DIR/expertfee.py" check <plan>
-python3 "$SKILL_DIR/expertfee.py" draft <plan>                       # 1210
-python3 "$SKILL_DIR/expertfee.py" check --transfer <plan>
-python3 "$SKILL_DIR/expertfee.py" draft --transfer <plan>            # 1212 원천세 이체 (확인받았을 때만)
+uv run "$SKILL_DIR/expertfee.py" check <plan>
+uv run "$SKILL_DIR/expertfee.py" draft <plan>                       # 1210
+uv run "$SKILL_DIR/expertfee.py" check --transfer <plan>
+uv run "$SKILL_DIR/expertfee.py" draft --transfer <plan>            # 1212 원천세 이체 (확인받았을 때만)
 ```
 저장 후 알릴 것: 임시보관 문서 번호(1210·1212 각각), 상신은 직접, 지난달 회계분이면 월마감 전 상신·결재.
 

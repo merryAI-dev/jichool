@@ -1,14 +1,18 @@
-#!/usr/bin/env python3
-"""MYSC 지출결의 CLI. Python 표준 라이브러리만 사용한다."""
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pypdfium2>=4.30"]
+# ///
+"""MYSC 지출결의 CLI. PDF 읽기(pypdfium2) 외에는 Python 표준 라이브러리만 사용한다."""
 
 import argparse
 import base64
 import calendar
+import contextlib
 import copy
 import datetime as dt
 from decimal import Decimal, InvalidOperation
 import getpass
-import fcntl
 import hashlib
 import hmac
 import html
@@ -17,6 +21,7 @@ import os
 import re
 from pathlib import Path
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -33,6 +38,12 @@ ORIGIN = "https://gw.mysc.co.kr"
 API = "/personal/APB1020New/"
 CONFIG = Path.home() / ".config" / "mysc-expense"
 SESSION = CONFIG / "session.json"
+WINDOWS = os.name == "nt"
+
+if WINDOWS:  # 콘솔·파이프 기본 인코딩(cp949) 대신 UTF-8로 내보내야 AI가 한글을 그대로 읽는다.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 class ExpenseError(Exception):
@@ -46,9 +57,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def read_private(path):
     path = Path(path)
-    with path.open() as handle:
+    with path.open(encoding="utf-8") as handle:
         mode = os.fstat(handle.fileno())
-        if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
+        # Windows는 유닉스 권한 비트가 없다. 사용자 프로필 폴더(%USERPROFILE%)의 ACL이 대신 보호한다.
+        if not WINDOWS and (mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077):
             raise ExpenseError(f"파일 접근권한을 600으로 설정하세요: {path}")
         return json.load(handle)
 
@@ -62,14 +74,14 @@ def write_private_text(path, raw, *, replace=False):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not replace:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
         return
     fd, temporary = tempfile.mkstemp(dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
@@ -77,6 +89,65 @@ def write_private_text(path, raw, *, replace=False):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+@contextlib.contextmanager
+def exclusive(path):
+    """작업 기록 폴더의 프로세스 간 잠금. macOS·Linux는 flock, Windows는 msvcrt.locking."""
+    path = Path(path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if WINDOWS:
+            import msvcrt
+            handle.seek(0)
+            while True:  # LK_LOCK은 10초 동안만 재시도하고 실패하므로 풀릴 때까지 반복한다.
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.5)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+
+def clipboard(clear=False):
+    """클립보드 읽기·비우기. macOS는 pbpaste/pbcopy, Windows는 기본 PowerShell."""
+    if sys.platform == "darwin":
+        if clear:
+            subprocess.run(["pbcopy"], input=b"", check=True)
+            return ""
+        return subprocess.run(["pbpaste"], capture_output=True, check=True).stdout.decode()
+    if WINDOWS:
+        script = ("Set-Clipboard -Value ' '" if clear else
+                  "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw")
+        return subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                              capture_output=True, check=True).stdout.decode("utf-8").strip()
+    raise ExpenseError("이 운영체제에서는 클립보드 인증을 지원하지 않습니다. --stdin을 사용하세요.")
+
+
+def browser_path():
+    """Chrome, 없으면 Edge(같은 크로뮴 엔진). Windows에는 Edge가 기본으로 깔려 있어 따로 설치할 것이 없다."""
+    if WINDOWS:
+        roots = [os.environ.get(key) for key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+        candidates = [Path(root) / sub for sub in (r"Google\Chrome\Application\chrome.exe",
+                                                   r"Microsoft\Edge\Application\msedge.exe") for root in roots if root]
+    else:
+        candidates = [Path(prefix) / app for app in ("Google Chrome.app/Contents/MacOS/Google Chrome",
+                                                      "Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+                      for prefix in ("/Applications", Path.home() / "Applications")]
+        candidates += [Path(found) for name in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge")
+                       if (found := shutil.which(name))]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    raise ExpenseError("Chrome이나 Edge를 찾을 수 없습니다. 둘 중 하나를 설치하세요.")
 
 
 def session_from_user_info(info):
@@ -1323,8 +1394,7 @@ def resume_command(args):
     path = Path(args.journal).resolve()
     if path.parent != (CONFIG / "drafts").resolve():
         raise ExpenseError("이 계정의 작업 기록 폴더 안에 있는 JSON을 지정하세요.")
-    with (CONFIG / "drafts" / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with exclusive(CONFIG / "drafts" / ".lock"):
         journal = read_private(path)
         head = journal["plan"]["head"]
         if str(head["coCd"]) != str(client.erp["companyCode"]) or str(head["empCd"]) != str(client.erp["userCode"]):
@@ -1382,8 +1452,7 @@ def draft(args):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     journal_path = directory / (key + ".json")
     # ponytail: 사용자 로컬 작업 기록에 전역 잠금. 다른 기기와의 공유는 서버 예약 기능 도입 시 추가.
-    with (directory / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with exclusive(directory / ".lock"):
         if journal_path.exists():
             journal = read_private(journal_path)
             if plan["head"] != journal["plan"]["head"] or [item["expense"] for item in plan["rows"]] != [item["expense"] for item in journal["plan"]["rows"]] or pdf != journal.get("pdf"):
@@ -1411,9 +1480,7 @@ def authenticate(args):
         print(json.dumps({"authenticated": True, "employee": client.erp["userName"], "department": client.erp["deptName"]}, ensure_ascii=False))
         return
     if args.clipboard:
-        if sys.platform != "darwin":
-            raise ExpenseError("클립보드 인증은 macOS에서만 지원합니다. --stdin을 사용하세요.")
-        raw = subprocess.run(["pbpaste"], capture_output=True, check=True).stdout.decode()
+        raw = clipboard()
     elif args.stdin:
         raw = sys.stdin.read()
     else:
@@ -1425,10 +1492,8 @@ def authenticate(args):
     session = session_from_user_info(info)
     Client(session).flags("S0", "01")
     write_private(SESSION, session, replace=True)
-    if args.clipboard:
-        current = subprocess.run(["pbpaste"], capture_output=True, check=True).stdout.decode()
-        if current == raw:
-            subprocess.run(["pbcopy"], input=b"", check=True)
+    if args.clipboard and clipboard() == raw:
+        clipboard(clear=True)
     print("인증 확인 완료. 세션을 사용자 전용 파일에 저장했습니다.")
 
 
