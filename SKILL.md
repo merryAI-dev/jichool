@@ -25,6 +25,11 @@ allowed-tools: Bash, Read, AskUserQuestion
 
 - `$SKILL_DIR`는 **이 SKILL.md가 있는 폴더**다. 기본은 `~/.claude/skills/jichool`. 세션 첫 명령 전에 실제 경로를 한 번 확인하고 이후 절대 경로로 실행한다. `expense.py`는 같은 폴더의 `statement.py`를 부르므로 두 파일을 떼어놓지 않는다.
 - 작업 파일은 `~/.config/mysc-expense/state/` 아래에 만든다. 사용자 프로젝트 폴더나 스킬 폴더에 만들지 않는다.
+- **Windows(대부분의 회사 PC, LG 그램 등)도 같은 명령이다.** 다만 셸에 따라 이렇게 한다.
+  - Git Bash: 이 문서 명령을 그대로 쓴다(`~`, `\` 줄바꿈 동작).
+  - PowerShell: `$SKILL_DIR`·`~` 대신 **절대 경로**(`C:\Users\<이름>\.claude\skills\jichool\expense.py`, `C:\Users\<이름>\.config\mysc-expense\...`)를 쓰고, 명령은 **한 줄로** 쓴다(`\` 줄바꿈 금지).
+  - 파일 경로는 사용자가 끌어다 놓은 그대로(`C:\Users\...\Downloads\명세서.xls`) 따옴표로 감싸 넘긴다. 한글·공백 경로도 된다.
+  - 바탕화면이 OneDrive로 옮겨진 PC가 많다. "바탕화면에 있어"라고 하면 `%USERPROFILE%\Desktop`과 `%USERPROFILE%\OneDrive\바탕 화면`(또는 `OneDrive\Desktop`)을 함께 본다. 다운로드는 `%USERPROFILE%\Downloads`.
 - **`--out`은 매번 새 파일 이름이어야 한다.** 덮어쓰기는 CLI가 거부한다. `2026-09.plan.json` → `2026-09-b.plan.json` → `2026-09-c.plan.json` 처럼 단계마다 늘린다.
 
 ---
@@ -92,7 +97,7 @@ uv run "$SKILL_DIR/amaranth.py" login     # 그 창의 로그인 정보로 연�
 > 그룹웨어 첫 화면이 보이면 알려주세요.
 
 **② Console 열기**
-> 그 그룹웨어 탭에서 `option` + `command` + `J` 를 같이 눌러주세요. (안 되면 `F12` 를 누르고, 위쪽 영어 메뉴 중 **`Console`** 을 누르세요)
+> 그 그룹웨어 탭에서 `Ctrl` + `Shift` + `J`(맥은 `option` + `command` + `J`)를 같이 눌러주세요. (안 되면 `F12` 를 누르고, 위쪽 영어 메뉴 중 **`Console`** 을 누르세요)
 > 화면 옆이나 아래에 영어로 된 창이 열리고, 맨 아래에 `>` 표시와 입력할 수 있는 칸이 보일 거예요.
 > 열렸으면 알려주세요.
 
@@ -117,11 +122,11 @@ uv run "$SKILL_DIR/amaranth.py" login     # 그 창의 로그인 정보로 연�
 uv run "$SKILL_DIR/expense.py" auth --clipboard
 ```
 
-macOS 전용이다. Linux면 `auth`(숨김 입력)를 사용자가 직접 실행하도록 안내한다.
+macOS·Windows에서 된다. Linux면 `auth`(숨김 입력)를 사용자가 직접 실행하도록 안내한다.
 
 성공하면 이름과 부서를 보여주며 확인시킨다: "연결됐어요. ○○○님 / ○○팀 맞으시죠?"
 
-`인증 만료`(HTTP 401)가 나오면 → 그룹웨어 탭을 **새로고침**(`command`+`R`)해서 화면이 다시 뜨는지 본다. 로그인 화면으로 넘어가면 다시 로그인한 뒤 ③만 반복한다. 그래도 안 되면 AXR팀 문의로 넘긴다. **다른 방법으로 토큰을 구해오게 하지 않는다.**
+`인증 만료`(HTTP 401)가 나오면 → 그룹웨어 탭을 **새로고침**(Windows `F5`, 맥 `command`+`R`)해서 화면이 다시 뜨는지 본다. 로그인 화면으로 넘어가면 다시 로그인한 뒤 ③만 반복한다. 그래도 안 되면 AXR팀 문의로 넘긴다. **다른 방법으로 토큰을 구해오게 하지 않는다.**
 
 ### 보안 안내 — ③ 단계에서 반드시 함께 말한다
 

@@ -1,0 +1,23 @@
+name: test
+
+# 회사 PC 대부분이 Windows라 Windows·macOS·Linux 모두에서 같은 테스트를 돌린다.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: 테스트
+        shell: bash
+        run: |
+          for test in test_amaranth test_expense test_taxinvoice test_expertfee; do
+            uv run "$test.py"
+          done
