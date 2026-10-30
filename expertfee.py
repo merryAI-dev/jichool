@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# dependencies = ["pypdfium2>=4.30", "pillow>=10", "pillow-heif>=0.18"]
 # ///
 """MYSC 전문가 활용비(외부인건비, 원천징수) 지출결의 CLI. PDF 읽기(pypdfium2)·사진 변환(Pillow) 외에는 Python 표준 라이브러리만 사용한다.
 
@@ -162,9 +162,14 @@ NAME_STOPWORDS = {word for words in DOC_KEYWORDS.values() for word in words} | {
 
 
 def to_jpeg(source, target):
-    """PNG 같은 사진을 JPEG로 바꾼다. Pillow가 먼저, HEIC처럼 Pillow가 못 여는 것은 macOS 기본 도구(sips)로."""
+    """PNG·HEIC(아이폰 사진) 같은 사진을 JPEG로 바꾼다. Pillow(+pillow-heif)가 먼저, 안 되면 macOS 기본 도구(sips)로."""
     try:
         from PIL import Image
+        try:
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
+        except ImportError:
+            pass
         with Image.open(source) as image:
             image.convert("RGB").save(target, "JPEG", quality=92)
         return Path(target)

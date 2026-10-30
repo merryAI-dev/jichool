@@ -30,11 +30,103 @@ def same_merchant(left, right, aliases=()):
 
 
 def read_statement(path, month):
+    """현대카드 명세서. 인쇄 PDF와 홈페이지에서 내려받은 엑셀(.xls·.xlsx)을 모두 읽는다."""
     path = Path(path).resolve(strict=True)
     raw = path.read_bytes()
-    if not raw.startswith(b"%PDF-") or not re.fullmatch(r"\d{4}-\d{2}", month):
-        raise StatementError("PDF 파일과 YYYY-MM 형식의 사용월을 지정하세요.")
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise StatementError("YYYY-MM 형식의 사용월을 지정하세요.")
     dt.datetime.strptime(month, "%Y-%m")
+    if raw.startswith(b"%PDF-"):
+        return _read_pdf(path, raw, month)
+    if raw.startswith(b"\xd0\xcf\x11\xe0") or raw.startswith(b"PK"):
+        return _read_sheet(path, raw, month)
+    raise StatementError("현대카드 명세서 PDF나 엑셀(.xls·.xlsx) 파일을 지정하세요.")
+
+
+def _sheet_rows(path, raw):
+    """엑셀 첫 시트의 행들. .xls는 xlrd, .xlsx는 표준 라이브러리(zip·XML)로 읽는다."""
+    if raw.startswith(b"PK"):
+        import zipfile
+        from xml.etree import ElementTree
+        ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(path) as book:
+            shared = []
+            if "xl/sharedStrings.xml" in book.namelist():
+                for item in ElementTree.fromstring(book.read("xl/sharedStrings.xml")).findall("m:si", ns):
+                    shared.append("".join(node.text or "" for node in item.iter(f"{{{ns['m']}}}t")))
+            sheet = ElementTree.fromstring(book.read("xl/worksheets/sheet1.xml"))
+        rows = []
+        for row in sheet.iter(f"{{{ns['m']}}}row"):
+            cells = {}
+            for cell in row.findall("m:c", ns):
+                column = re.sub(r"\d", "", cell.get("r"))
+                index = 0
+                for char in column:
+                    index = index * 26 + ord(char) - 64
+                value = cell.find("m:v", ns)
+                text = "".join(node.text or "" for node in cell.iter(f"{{{ns['m']}}}t"))
+                if cell.get("t") == "s" and value is not None:
+                    text = shared[int(value.text)]
+                elif value is not None:
+                    text = value.text or ""
+                cells[index - 1] = text
+            rows.append([cells.get(i, "") for i in range(max(cells, default=-1) + 1)])
+        return rows
+    try:
+        import xlrd
+    except ImportError:
+        raise StatementError("엑셀(.xls) 명세서를 읽으려면 xlrd가 필요합니다. `uv run`으로 실행하세요.") from None
+    try:
+        sheet = xlrd.open_workbook(file_contents=raw).sheet_by_index(0)
+    except xlrd.XLRDError:
+        raise StatementError("엑셀 명세서를 열지 못했습니다. 암호가 걸려 있으면 풀어서 다시 저장하세요.") from None
+    return [[sheet.cell_value(r, c) for c in range(sheet.ncols)] for r in range(sheet.nrows)]
+
+
+def _read_sheet(path, raw, month):
+    """현대카드 홈페이지 '청구내역상세' 엑셀. 승인번호가 있어 카드 원본과 정확히 짝지을 수 있다."""
+    rows = [[unicodedata.normalize("NFKC", str(cell)).strip() for cell in row] for row in _sheet_rows(path, raw)]
+    header_at = next((i for i, row in enumerate(rows) if "이용일자" in row and "가맹점" in row), None)
+    if header_at is None:
+        raise StatementError("엑셀에서 '이용일자'·'가맹점' 머리글을 찾을 수 없습니다. 현대카드 청구내역 엑셀인지 확인하세요.")
+    header = rows[header_at]
+    def column(*names):
+        found = [header.index(name) for name in names if name in header]
+        return found[0] if found else None
+    date_at, merchant_at = column("이용일자"), column("가맹점")
+    amount_at = column("국내청구금액", "청구금액", "이용금액", "국내이용금액")
+    currency_at, approval_at = column("통화코드"), column("승인번호")
+    if amount_at is None:
+        raise StatementError("엑셀에서 청구금액 열을 찾을 수 없습니다.")
+    def number(text):
+        text = text.replace(",", "")
+        if not re.fullmatch(r"-?\d+(\.0+)?", text):
+            raise StatementError(f"엑셀 금액을 읽을 수 없습니다: {text}")
+        return int(float(text))
+    charges = []
+    for index, row in enumerate(rows[header_at + 1:], header_at + 2):
+        if len(row) <= max(date_at, merchant_at, amount_at) or not row[date_at]:
+            continue
+        digits = re.sub(r"\D", "", row[date_at])
+        if len(digits) != 8:
+            continue  # 합계·안내 행
+        dt.datetime.strptime(digits, "%Y%m%d")
+        if digits[:6] != month.replace("-", ""):
+            raise StatementError("명세서에 지정한 사용월 밖의 거래가 있습니다. 사용월별 명세서를 지정하세요.")
+        currency = row[currency_at] if currency_at is not None else ""
+        charge = {"id": f"x{index}", "page": index, "date": digits, "merchant": row[merchant_at],
+                  "amount": number(row[amount_at]),
+                  "currency": currency if re.fullmatch(r"[A-Z]{3}", currency or "") else "KRW"}
+        if approval_at is not None and row[approval_at]:
+            charge["approval"] = row[approval_at]
+        charges.append(charge)
+    if not charges:
+        raise StatementError("엑셀에서 거래 행을 찾을 수 없습니다.")
+    return {"format": "hyundai-excel-v1", "file": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
+            "count": len(charges), "total": sum(charge["amount"] for charge in charges), "charges": charges}
+
+
+def _read_pdf(path, raw, month):
     try:
         document = pdftext.pages(path)
     except pdftext.PdfTextError as error:
@@ -113,6 +205,11 @@ def read_statement(path, month):
 
 def match_candidates(charge, rows, aliases=()):
     same_date = [row for row in rows if row["expense"]["cardDt"] == charge["date"] and not row.get("excluded")]
+    if charge.get("approval"):  # 엑셀 명세서: 승인번호가 같으면 가맹점 표기가 달라도 같은 거래다.
+        approved = [row for row in same_date
+                    if str(row["expense"].get("sunginNb") or "").lstrip("0") == charge["approval"].lstrip("0")]
+        if len(approved) == 1:
+            return approved, "날짜·승인번호 일치"
     named = [row for row in same_date if same_merchant(charge["merchant"], row["expense"]["trNm"], aliases)]
     exact = [row for row in named if row["expense"]["sumAm"] == charge["amount"]]
     if exact:

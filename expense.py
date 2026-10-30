@@ -1,9 +1,9 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdfium2>=4.30"]
+# dependencies = ["pypdfium2>=4.30", "xlrd>=2"]
 # ///
-"""MYSC 지출결의 CLI. PDF 읽기(pypdfium2) 외에는 Python 표준 라이브러리만 사용한다."""
+"""MYSC 지출결의 CLI. PDF 읽기(pypdfium2)·엑셀 명세서(xlrd) 외에는 Python 표준 라이브러리만 사용한다."""
 
 import argparse
 import base64
@@ -252,12 +252,17 @@ class Client:
         return self.post("/system/codepickers/CP0001A0001", {
             "helpTy": help_type, "langkind": self.erp.get("language", "KOR"), **params})
 
+    def card_list(self, start, end):
+        """기간 안에 이 계정이 쓸 수 있는 카드 목록(그룹웨어 카드 선택창과 같은 값)."""
+        return self.post(API + "0ap00008", {
+            "issDtFrom": start, "issDtTo": end, "regNb": "", "trNm": "", "amFrom": "", "amTo": "",
+            "sunginNb": "", "tabFg": "1", "baNbList": [], "isShowCardPrivacy": "", "isShowAccountPrivacy": ""})
+
     def cards(self, start, end, card_name):
         params = {"issDtFrom": start, "issDtTo": end, "regNb": "", "trNm": "",
                   "amFrom": "", "amTo": "", "sunginNb": "", "tabFg": "1",
                   "baNbList": [], "isShowCardPrivacy": "", "isShowAccountPrivacy": ""}
-        cards = self.post(API + "0ap00008", params)
-        cards = [card for card in cards if card.get("cardNm") == card_name]
+        cards = [card for card in self.card_list(start, end) if card.get("cardNm") == card_name]
         if len(cards) != 1:
             raise ExpenseError("이름이 정확히 일치하는 카드를 한 개 선택할 수 없습니다.")
         params["baNbList"] = [{"baNb": row["cardCd"], "cardFg": row["cardFg"]} for row in cards]
@@ -455,10 +460,17 @@ def make_plan(snapshot):
         candidates = history_candidates(transaction, snapshot["history"], account["userCode"])
         proposed = {}
         for field in ("rmkDc", "cashCd", "pjtCd", "carCd"):
-            values = {str(item["row"].get(field) or "") for item in candidates}
-            if len(values) == 1 and next(iter(values)):
-                row[field] = next(iter(values))
-                proposed[field] = {"value": row[field], "sourceDocuments": sorted({item["linkKey"] for item in candidates})}
+            documents = {}
+            for item in candidates:
+                value = str(item["row"].get(field) or "")
+                if value:
+                    documents.setdefault(value, set()).add(item["linkKey"])
+            ranked = sorted(documents.items(), key=lambda pair: -len(pair[1]))
+            # 과거 값이 하나면 그대로, 여럿이면 가장 많이 쓴 값을 미리 채운다(여럿인 경우는 inspect가 확인 질문을 낸다).
+            if ranked and (len(ranked) == 1 or len(ranked[0][1]) > len(ranked[1][1])):
+                row[field] = ranked[0][0]
+                proposed[field] = {"value": row[field], "sourceDocuments": sorted(ranked[0][1]),
+                                   "basis": "과거 승인 결의 " + ("동일" if len(ranked) == 1 else "최다")}
         item = {"identity": key, "expense": row, "proposed": proposed,
                 "candidateCount": len(candidates), "receiptVerified": True}
         item["issues"] = row_issues(row, snapshot)
@@ -535,13 +547,61 @@ def load_profile(path, account):
     return profile
 
 
+def suggest_profile(cards, history, user_code):
+    """사용자에게 묻기 전에 그룹웨어 카드 목록과 최근 6개월 승인된 본인 카드 결의로 카드·기본 프로젝트를 고른다.
+    카드: 쓸 수 있는 카드가 하나면 그것, 여럿이면 과거 결의에 가장 많이 쓴 카드(동률이면 고르지 않음).
+    프로젝트: 과거 카드 결의 행의 절반 이상을 차지한 프로젝트만. 아니면 비워 두고 행마다 이력으로 제안한다."""
+    names = sorted({str(card.get("cardNm") or "") for card in cards} - {""})
+    by_code = {card.get("cardCd"): card.get("cardNm") for card in cards}
+    rows = [row for document in history if str(document["head"].get("approState")) == "1"
+            and str(document["head"].get("empCd")) == str(user_code) for row in document["detail"]]
+    usage = {name: 0 for name in names}
+    for row in rows:
+        name = by_code.get(row.get("cardCd")) or row.get("cardNm")
+        if name in usage:
+            usage[name] += 1
+    ranked = sorted(names, key=lambda name: -usage[name])
+    card = None
+    if len(names) == 1:
+        card = {"name": names[0], "reason": "그룹웨어에서 쓸 수 있는 카드가 하나뿐"}
+    elif ranked and usage[ranked[0]] and usage[ranked[0]] > usage[ranked[1]]:
+        card = {"name": ranked[0], "reason": f"최근 6개월 카드 결의 {usage[ranked[0]]}건에 사용"}
+    mine = [row for row in rows if not card or (by_code.get(row.get("cardCd")) or row.get("cardNm")) == card["name"]]
+    counts = {}
+    for row in mine:
+        if row.get("pjtCd"):
+            counts.setdefault(row["pjtCd"], [row.get("pjtNm") or "", 0])[1] += 1
+    project = None
+    if counts:
+        code, (name, count) = max(counts.items(), key=lambda pair: pair[1][1])
+        if count * 2 >= len(mine):
+            project = {"code": code, "name": name, "reason": f"최근 6개월 카드 결의 {len(mine)}건 중 {count}건"}
+    return {"card": card, "project": project,
+            "cards": [{"name": name, "usedRows": usage[name]} for name in ranked]}
+
+
 def profile_command(args):
     client = Client()
+    suggestion = None
+    if not args.card or args.project is None:
+        today = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date()
+        start = (today - dt.timedelta(days=183)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+        suggestion = suggest_profile(client.card_list(start, end), client.history(start, end, 1211),
+                                     client.erp["userCode"])
+    card = args.card or (suggestion["card"] or {}).get("name")
+    if not card:
+        print(json.dumps({"needsChoice": "card", "cards": suggestion["cards"],
+                          "message": "카드를 하나로 고를 수 없습니다. 목록에서 사용자에게 고르게 한 뒤 --card로 다시 실행하세요."},
+                         ensure_ascii=False, indent=2))
+        raise ExpenseError("카드 선택 필요")
+    project = args.project if args.project is not None else (suggestion["project"] or {}).get("code", "")
     profile = {"schema": 1, "owner": {key: str(client.erp[key]) for key in ("companyCode", "userCode")},
-               "cardName": args.card, "defaultProject": args.project or "",
+               "cardName": card, "defaultProject": project,
                "dates": {"accounting": "month-end", "payment": "today"}, "rules": [], "merchantAliases": []}
     write_private(args.out, profile)
-    print("개인 프로필 생성: " + args.out + " (영구 적요 규칙은 아직 없음)")
+    print(json.dumps({"profile": args.out, "card": card, "defaultProject": project,
+                      "suggested": suggestion}, ensure_ascii=False, indent=2))
 
 
 def rule_command(args):
@@ -581,12 +641,20 @@ def bind_statement(plan, item, charge, reason):
     if row["sumAm"] != charge["amount"]:
         if charge["currency"] == "KRW" or row["vatAm"] or item.get("alreadySaved"):
             raise ExpenseError("청구금액이 다릅니다. 근거를 확인하고 금액·부가세를 직접 수정하세요.")
+        if not str(plan["statement"]["file"]).lower().endswith(".pdf"):
+            # 엑셀은 첨부 근거(PDF)가 될 수 없어 금액은 바꾸지 않고 연결만 한다. inspect가 금액 불일치로 묻는다.
+            item["statementMatch"] = {"id": charge["id"], "page": charge["page"], "reason": reason}
+            return
         record_adjustment(plan, item, charge["amount"], 0, plan["statement"]["file"], charge["page"],
                           "명세서의 해외 원화 청구금액 적용")
     item["statementMatch"] = {"id": charge["id"], "page": charge["page"], "reason": reason}
 
 
 def reconcile_statement(plan, profile):
+    if "charges" not in plan.get("statement", {}):
+        for item in plan["rows"]:
+            item["issues"] = row_issues(item["expense"], plan["source"])
+        return
     charges = plan["statement"]["charges"]
     bound = {item["statementMatch"]["id"] for item in plan["rows"] if item.get("statementMatch")}
     while True:
@@ -655,10 +723,10 @@ def inspect_plan(plan):
                 continue
             if field == "trCd" and not options:
                 continue  # 거래처 코드가 필수인 경우에는 row_issues가 질문한다.
-            count = sum(option["count"] for option in options)
-            if len(options) != 1 or count < 2 or (field == "trCd" and item["expense"].get(field) != options[0]["value"]):
+            # 과거 승인 결의가 한 가지 값이면 1건이어도 채운 채로 두고 묻지 않는다(검토 화면에서 일괄 확인).
+            if len(options) > 1 or (field == "trCd" and item["expense"].get(field) != options[0]["value"]):
                 questions.append({"kind": "history", "row": index, "field": field,
-                                  "message": labels[field] + ("의 과거 선택이 서로 다릅니다" if len(options) > 1 else "의 승인 근거가 부족합니다"),
+                                  "message": labels[field] + ("의 과거 선택이 서로 다릅니다(가장 많이 쓴 값으로 채워 둠)" if len(options) > 1 else "의 과거 거래처 코드 확인 필요"),
                                   "current": item["expense"].get(field, ""), "options": options})
         description = item["expense"].get("rmkDc", "")
         if (item.get("historyOptions") and re.search(r"야근|출장|회의|접대|회식", description)
@@ -669,6 +737,8 @@ def inspect_plan(plan):
                               "current": description})
     return {"count": len(included), "total": sum(row["expense"]["sumAm"] for row in included),
             "statementCount": plan.get("statement", {}).get("count"), "statementTotal": plan.get("statement", {}).get("total"),
+            "statementProvided": "charges" in plan.get("statement", {}),
+            "filledFromHistory": sum(bool(row.get("proposed")) for row in included if not row.get("alreadySaved")),
             "alreadySaved": sum(bool(row.get("alreadySaved")) for row in included), "questions": questions}
 
 
@@ -739,7 +809,8 @@ def prepare_plan(snapshot, statement, profile, today, completed=()):
 def prepare(args):
     client = Client()
     profile = load_profile(args.profile, client.erp)
-    statement = read_statement(args.pdf, args.month)
+    # 명세서는 대조용이다. 없으면 그룹웨어 카드 원본만으로 만들고, 해외 결제처럼 청구액이 바뀔 수 있는 건만 표시한다.
+    statement = read_statement(args.pdf, args.month) if args.pdf else {"format": "none"}
     year, month = map(int, args.month.split("-"))
     start, end = f"{year:04d}{month:02d}01", f"{year:04d}{month:02d}{calendar.monthrange(year, month)[1]}"
     snapshot = collect(client, start, end, 1211, profile["cardName"], end)
@@ -755,7 +826,7 @@ def prepare(args):
             continue
         write_private(path, journal, replace=True)
         previous = journal.get("validationPlan", {})
-        if previous.get("statement", {}).get("sha256") == statement["sha256"]:
+        if previous.get("statement", {}).get("sha256") == statement.get("sha256"):
             previous_choices.update({row["identity"]: row for row in previous["rows"]})
         for card, receipt, item in zip(original["cards"], original["receipts"], journal["plan"]["rows"]):
             key = item["identity"]
@@ -767,7 +838,7 @@ def prepare(args):
                 snapshot["cards"].append(card)
                 snapshot["receipts"].append(receipt)
             item = copy.deepcopy(item)
-            if journal["plan"].get("statement", {}).get("sha256") != statement["sha256"]:
+            if journal["plan"].get("statement", {}).get("sha256") != statement.get("sha256"):
                 item.pop("statementMatch", None)
             completed.append({**item, "alreadySaved": {"docId": journal["docId"], "journal": str(path)}})
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y%m%d")
@@ -1506,9 +1577,9 @@ def main():
     source.add_argument("--stdin", action="store_true")
     source.add_argument("--status", action="store_true", help="토큰을 출력하지 않고 현재 인증 상태만 확인")
     auth.set_defaults(run=authenticate)
-    command = commands.add_parser("profile", help="본인용 카드·기본 프로젝트·날짜 프로필 생성")
-    command.add_argument("--card", required=True)
-    command.add_argument("--project")
+    command = commands.add_parser("profile", help="본인용 카드·기본 프로젝트·날짜 프로필 생성(빈 값은 과거 결의로 자동 선택)")
+    command.add_argument("--card", help="생략하면 카드 목록·과거 결의로 고른다")
+    command.add_argument("--project", help="생략하면 과거 결의의 대표 프로젝트, 빈 문자열이면 없음")
     command.add_argument("--out", required=True)
     command.set_defaults(run=profile_command)
     command = commands.add_parser("rule", help="명시적으로 확인한 영구 적요 규칙을 새 프로필에 저장")
@@ -1520,9 +1591,9 @@ def main():
     command.add_argument("--statement-merchant", help="명세서에 표시되는 같은 가맹점의 이름")
     command.add_argument("--out", required=True)
     command.set_defaults(run=rule_command)
-    command = commands.add_parser("prepare", help="월·현대카드 PDF·개인 프로필로 검토안 및 질문 생성")
+    command = commands.add_parser("prepare", help="월·개인 프로필(·현대카드 PDF)로 검토안 및 질문 생성")
     command.add_argument("--month", required=True)
-    command.add_argument("--pdf", required=True)
+    command.add_argument("--pdf", help="현대카드 명세서 PDF 또는 엑셀(.xls·.xlsx). 있으면 청구액과 대조하고, 없어도 진행한다")
     command.add_argument("--profile", required=True)
     command.add_argument("--out", required=True)
     command.set_defaults(run=prepare)

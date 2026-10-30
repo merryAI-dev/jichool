@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# dependencies = ["pypdfium2>=4.30", "pillow>=10", "xlrd>=2"]
 # ///
 """실행: python3 test_expense.py [실제 조회로 생성한 .plan.json 파일]"""
 import copy
@@ -418,5 +418,64 @@ def check():
     print("이력 충돌·종료 프로젝트·실명확인 재사용 방지·취소 거래 검증 통과")
 
 
+def check_fewer_questions():
+    """과거 결의로 카드·프로젝트를 고르고, 명세서 없이도 검토안이 나오는지."""
+    doc = lambda rows, state="1", emp="E1": {"head": {"approState": state, "empCd": emp}, "detail": rows}
+    cards = [{"cardNm": "법인카드 1234", "cardCd": "C1"}, {"cardNm": "팀 공용카드", "cardCd": "C2"}]
+    history = [doc([{"cardCd": "C1", "pjtCd": "P1", "pjtNm": "AXR_경비"}] * 3 + [{"cardCd": "C1", "pjtCd": "P2"}]),
+               doc([{"cardCd": "C2", "pjtCd": "P2"}]),
+               doc([{"cardCd": "C2", "pjtCd": "P2"}] * 9, emp="OTHER"),     # 남의 결의는 세지 않는다
+               doc([{"cardCd": "C2", "pjtCd": "P2"}] * 9, state="0")]      # 미승인도 세지 않는다
+    picked = app.suggest_profile(cards, history, "E1")
+    assert picked["card"]["name"] == "법인카드 1234" and picked["project"]["code"] == "P1", picked
+    assert app.suggest_profile(cards[:1], [], "E1")["card"]["name"] == "법인카드 1234"
+    tie = app.suggest_profile(cards, [doc([{"cardCd": "C1"}]), doc([{"cardCd": "C2"}])], "E1")
+    assert tie["card"] is None and [c["name"] for c in tie["cards"]], "동률이면 고르지 말고 사용자에게 묻는다"
+    split = app.suggest_profile(cards[:1], [doc([{"cardCd": "C1", "pjtCd": "P1"}, {"cardCd": "C1", "pjtCd": "P2"},
+                                                 {"cardCd": "C1", "pjtCd": "P3"}])], "E1")
+    assert split["project"] is None, "대표 프로젝트가 절반 미만이면 비워 둔다"
+    plan = {"statement": {"format": "none"}, "rows": [], "unresolved": []}
+    summary = app.inspect_plan(plan)
+    assert summary["statementProvided"] is False and summary["questions"] == []
+    item = {"expense": {"rmkDc": "AWS", "cashCd": "01", "pjtCd": "P1", "sumAm": 1000}, "issues": [], "proposed": {"rmkDc": {}},
+            "historyOptions": {"rmkDc": [{"value": "AWS", "count": 1}], "cashCd": [{"value": "01", "count": 1}],
+                               "pjtCd": [{"value": "P1", "count": 1}, {"value": "P2", "count": 1}], "trCd": []}}
+    questions = app.inspect_plan({"statement": {"format": "none"}, "rows": [item], "unresolved": []})["questions"]
+    assert [q["field"] for q in questions] == ["pjtCd"], questions
+    print("질문 줄이기: 카드·대표 프로젝트 자동 선택·동률/분산 시 질문·명세서 없이 진행·과거 1건 일치는 묻지 않음 통과")
+
+
+def check_excel_statement():
+    """현대카드 홈페이지 청구내역 엑셀(.xlsx): 머리글로 열을 찾고, 승인번호로 짝짓는다."""
+    import tempfile, zipfile
+    from statement import match_candidates as match
+    header = ["이용일자", "카드번호", "국내이용금액", "국내청구금액", "해외현지금액", "통화코드", "가맹점", "승인번호"]
+    data = [header, ["2026.09.02", "****-4105", "71671", "71,671", "0", "-", "KCP - Amazon_AWS", "00283500"],
+            ["2026.09.02", "****-4105", "14997", "14997", "11", "USD", "FLY.IO", "920373"]]
+    cell = lambda r, c, v: f'<c r="{chr(65 + c)}{r}" t="inlineStr"><is><t>{v}</t></is></c>'
+    sheet = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+             + "".join(f'<row r="{r}">' + "".join(cell(r, c, v) for c, v in enumerate(row)) + "</row>"
+                       for r, row in enumerate(data, 1)) + "</sheetData></worksheet>")
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "명세서.xlsx"
+        with zipfile.ZipFile(path, "w") as book:
+            book.writestr("xl/worksheets/sheet1.xml", sheet)
+        parsed = read_statement(path, "2026-09")
+        assert parsed["format"] == "hyundai-excel-v1" and parsed["count"] == 2 and parsed["total"] == 86668
+        assert [c["currency"] for c in parsed["charges"]] == ["KRW", "USD"] and parsed["charges"][1]["approval"] == "920373"
+        try:
+            read_statement(path, "2026-10")
+            raise AssertionError("사용월 밖 거래를 받아들였습니다")
+        except StatementError:
+            pass
+    rows = [{"expense": {"cardDt": "20260902", "trNm": "Amazon Web Services Korea", "sumAm": 71671, "vatAm": 0,
+                         "sunginNb": "283500"}}]
+    found, reason = match(parsed["charges"][0], rows)
+    assert found == rows and reason == "날짜·승인번호 일치", reason
+    print("엑셀 명세서: 머리글 열 찾기·통화·사용월 검사·승인번호로 짝짓기 통과")
+
+
 if __name__ == "__main__":
     check()
+    check_fewer_questions()
+    check_excel_statement()

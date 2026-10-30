@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# dependencies = ["pypdfium2>=4.30", "pillow>=10", "xlrd>=2"]
 # ///
 """실행: python3 test_amaranth.py  (네트워크 없음, 가상 응답)"""
 import io

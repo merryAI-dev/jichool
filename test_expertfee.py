@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdfium2>=4.30", "pillow>=10"]
+# dependencies = ["pypdfium2>=4.30", "pillow>=10", "pillow-heif>=0.18", "xlrd>=2"]
 # ///
 """실행: python3 test_expertfee.py  (네트워크 없음, 가상 서류·가상 그룹웨어 값)"""
 import json
