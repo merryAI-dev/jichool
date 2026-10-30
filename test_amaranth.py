@@ -119,7 +119,7 @@ def check_tools():
     assert view["input_schema"]["required"] == ["doc_id"]
     here = Path(__file__).parent / "tools"
     for style in ("anthropic", "openai"):
-        assert json.loads((here / f"{style}-tools.json").read_text()) == am.tool_schemas(style), \
+        assert json.loads((here / f"{style}-tools.json").read_text(encoding="utf-8")) == am.tool_schemas(style), \
             f"tools/{style}-tools.json이 카탈로그와 다릅니다. amaranth.py tools로 다시 생성하세요."
     print("도구: Claude·GPT 정의가 같은 카탈로그에서 생성·배포 파일 일치 통과")
 
