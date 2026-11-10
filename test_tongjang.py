@@ -218,6 +218,39 @@ class Learning(unittest.TestCase):
         self.assertEqual(self.planned()["rows"][0]["learned"], {})
 
 
+class PasteFirst(unittest.TestCase):
+    header = ["작성자", "No.", "", "", "", "지출구분"]
+
+    def planned(self, bal=8000):
+        history = [hist(1, "가게", bal=9000)]
+        return t.plan(history, [t.row_dict([None, "2026.03.05", "체크카드", "가게", "표시", 1000, 0, bal, "서울", ""], 0)])
+
+    def test_bank_stage_writes_only_bank_columns_without_answers(self):
+        result = t.finalize(self.planned(), {}, None, "", "bank")
+        self.assertEqual([r["range"] for r in result["ranges"]], ["A10:J10"])
+        self.assertEqual(result["ranges"][0]["values"][0][:8], [2, "2026.03.05", "체크카드", "가게", "표시", 1000, 0, 8000])
+        self.assertEqual((result["unanswered"], result["learn"]), ([], []))
+
+    def test_bank_stage_still_stops_on_balance_gap(self):
+        with self.assertRaises(t.ToolError):
+            t.finalize(self.planned(bal=5000), {}, None, "", "bank")
+
+    def test_decide_stage_skips_bank_columns_and_passes_guard(self):
+        template = {"row": 20, "values": ["", 17], "header": self.header}
+        answers = {"rows": {"2": {"K": "2.직접비", "L": "세목", "O": "항목", "P": "적요", "M": 900, "N": 100}}, "card": "법인카드(0000)"}
+        result = t.finalize(self.planned(), answers, template, "작성자", "decide")
+        self.assertEqual(result["ranges"][0]["range"], "K10:P10")
+        self.assertEqual(result["ranges"][0]["values"][0], ["2.직접비", "세목", 900, 100, "항목", "적요"])
+        self.assertEqual(result["ranges"][-1]["range"], "F5:F5")
+        current = [[[""] * 6]] + [[[""]] for _ in result["ranges"][1:]]
+        self.assertEqual(t.guard(result, current), [])
+
+    def test_stages_follow_a_moved_layout(self):
+        letters = [t.col_letter(i + 1) if i else "A" for i in range(16)]
+        planned = {**self.planned(), "layout": {"columns": letters}}
+        self.assertEqual([r["range"] for r in t.finalize(planned, {}, None, "", "bank")["ranges"]], ["A10:A10", "C10:K10"])
+
+
 class BankTables(unittest.TestCase):
     def test_kb_table(self):
         matrix = [["계좌", "x"], ["거래일시", "적요", "의뢰인/수취인", "내통장표시내용", "출금금액", "입금금액", "잔액", "취급점", "구분"], ["2026-03-05 11:00:00", "인터넷출금이체", "가게", "표시", "1,000", "0", "9,000", "서울", ""], ["합계"]]

@@ -37,6 +37,7 @@ CANCELLED_STATE = "-3"
 CARD_MATCH_DAYS = 5
 OTHER_MATCH_DAYS = 45
 BANK_HEADERS = ["통장번호", "거래일시", "적요", "의뢰인/수취인", "내통장표시내용", "출금금액", "입금금액", "잔액", "취급점", "구분", "비목", "세목", "공급가액", "부가세", "CashFlow", "적요"]
+BANK_FIELDS = 10
 REQUIRED_HEADERS = ("통장번호", "거래일시", "출금금액", "입금금액", "잔액")
 USAGE_HEADERS = {"작성자": "A", "No.": "B", "지출구분": "F"}
 BANK_MAPS = {
@@ -412,7 +413,8 @@ def payment_method(kind, card):
     return card if text(kind) in CARD_TYPES else "계좌이체"
 
 
-def finalize(planned, answers, template, author):
+def finalize(planned, answers, template, author, stage="all"):
+    """stage는 all(한 번에), bank(은행 원본만), decide(판단 칸과 사용내역만)."""
     if planned["balanceIssues"] and not answers.get("acceptBalanceIssues"):
         raise ToolError("잔액이 이어지지 않는 행이 있어 쓸 범위를 만들지 않습니다. 은행 표를 다시 읽거나 사용자 확인을 받으세요.")
     rows = planned["rows"]
@@ -448,12 +450,17 @@ def finalize(planned, answers, template, author):
     layout = planned.get("layout") or {}
     letters = layout.get("columns") or [col_letter(i) for i in range(16)]
     bank_tab = layout.get("bankTab", BANK_TAB)
-    usage_tab = template.get("tab", USAGE_TAB)
-    columns = usage_columns(template, answers)
+    usage_tab = (template or {}).get("tab", USAGE_TAB)
+    if stage != "all":
+        letters = [c if (i < BANK_FIELDS) == (stage == "bank") else None for i, c in enumerate(letters)]
     ranges = bank_ranges(bank_tab, letters, matrix, first, last)
-    extra, notes = usage_rows(template, [row["no"] for row in rows], author, columns, usage_tab)
+    if stage == "bank":
+        unanswered, lessons, columns, extra, notes = [], [], {}, [], []
+    else:
+        columns = usage_columns(template, answers)
+        extra, notes = usage_rows(template, [row["no"] for row in rows], author, columns, usage_tab)
     card = answers.get("card")
-    payment = columns["지출구분"]
+    payment = columns.get("지출구분")
     if card and payment:
         top = rows[0]["no"] + template["row"] - int(num(template["values"][ord(columns["No."]) - ord("A")]))
         extra.append({"tab": usage_tab, "range": f"{payment}{top}:{payment}{top + len(rows) - 1}", "values": [[payment_method(r["type"], card)] for r in rows]})
@@ -827,7 +834,11 @@ def main():
     graded.add_argument("history")
     graded.add_argument("answers", nargs="+")
     graded.add_argument("--review")
+    paste = sub.add_parser("paste", help="은행 원본 칸만 먼저 쓸 범위로 변환")
+    paste.add_argument("plan")
+    paste.add_argument("--out")
     final = sub.add_parser("finalize", help="승인 내용을 시트에 쓸 범위로 변환")
+    final.add_argument("--stage", choices=["all", "decide"], default="all", help="decide: 은행 원본을 먼저 쓴 뒤 판단 칸만")
     final.add_argument("plan")
     final.add_argument("answers")
     final.add_argument("usage_template")
@@ -839,6 +850,8 @@ def main():
             rows = load_history(args.history)
             last = rows[-1]
             write_json({"rows": len(rows), "lastRow": last["row"], "lastNo": last["no"], "lastDate": text(last["dt"])[:10], "lastBalance": last["bal"]})
+        elif args.command == "paste":
+            write_json(finalize(json.loads(Path(args.plan).expanduser().read_text(encoding="utf-8-sig")), {}, None, "", "bank"), args.out)
         elif args.command == "columns":
             write_json(column_report(history_header(args.history)))
         elif args.command == "eval":
@@ -886,7 +899,7 @@ def main():
                 raise ToolError("작성자 닉네임이 필요합니다. 처음 한 번만 물어 --author로 넘겨 주세요.")
             if "card" not in answers and remembered(scope, "카드"):
                 answers["card"] = remembered(scope, "카드")
-            result = finalize(planned, answers, load(args.usage_template), author)
+            result = finalize(planned, answers, load(args.usage_template), author, args.stage)
             write_json({**result, "author": author, "card": answers.get("card", ""), "scope": scope}, args.out)
     except ToolError as error:
         print(f"중단: {error}", file=sys.stderr)
