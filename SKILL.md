@@ -78,7 +78,22 @@ uv run "$SKILL_DIR/learn.py" run --flow expense --rows <행 수> --asked <질문
 - 말투·분량·질문 방식에 대한 지적이나 선호 (`preference`, 여러 흐름에 해당하면 `--flow '*'`)
 - "이건 묻지 마", "이 순서로 해" 같은 절차 지적, 막혔다가 풀린 방법 (`procedure`)
 
-`recentRuns`에서 같은 범위의 질문 수가 줄지 않았으면, 이번에 물은 것 중 기억이나 과거 기록으로 답할 수 있었던 것을 찾아 `procedure`로 남긴다.
+### 4. 개선안을 내고 쌓는다
+
+값을 기억하는 데서 멈추지 않고, 일하는 방식 자체를 고친다. 실행을 마칠 때마다 한다.
+
+```sh
+uv run "$SKILL_DIR/learn.py" review --flow <흐름> [--scope <시트 ID·프로젝트>]
+uv run "$SKILL_DIR/learn.py" propose --flow <흐름> --kind domain --text '<앞으로 이렇게 한다>' --because '<이번 실행의 근거>'
+uv run "$SKILL_DIR/learn.py" adopt --id <번호>
+uv run "$SKILL_DIR/learn.py" reject --id <번호> --reason '<사용자가 말한 이유>'
+```
+
+- **제안:** `review`의 자주 고친 칸(`corrected`), 값이 갈리는 칸(`split`), 줄지 않는 질문 수(`askedNotFalling`), 이번 대화의 지적을 보고 개선안을 낸다. 업무 하나에만 해당하면 `domain`, 모든 흐름에 해당하면 `general`이다. 한 번에 두 개까지 낸다.
+- **근거 필수:** `--because`에는 이번 실행에서 실제로 일어난 일을 적는다. 근거가 없으면 내지 않는다. `rejected`에 있는 내용은 다시 내지 않는다.
+- **보여 주기:** 결과 표 아래에 "다음부터 이렇게 할게요" 한 줄로만 보여 준다. 답을 요구하지 않는다.
+- **축적:** 사용자가 반대하지 않고 다음 요청으로 넘어가면 `adopt`, 반대하면 `reject`로 남긴다. 채택한 개선안은 근거와 함께 다음 실행의 `notes`에 나온다.
+- 개선안에 아래 "기억이 바꾸지 않는 것"을 줄이는 내용을 넣지 않는다.
 
 ### 기억이 바꾸지 않는 것
 

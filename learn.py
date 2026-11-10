@@ -16,8 +16,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows 콘솔·파이프 기본 인코딩 대신 UTF-8로 내보내야 AI가 한글을 그대로 읽는다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 SOURCES = ("accepted", "answer", "correction", "always")
 KINDS = ("preference", "procedure")
+PROPOSAL_KINDS = ("general", "domain")
 ALL = "*"
 
 
@@ -29,7 +35,7 @@ def load():
     path = memory_path()
     if not path.exists():
         return {"values": {}, "notes": [], "runs": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def save(data):
@@ -116,7 +122,60 @@ def brief(data, flow, scope=None):
             if got["status"] != "none":
                 facts[field] = got["value"]
     runs = [r for r in data["runs"] if r["flow"] == flow and (not scope or r["scope"] == scope)][-5:]
-    return {"notes": [{"kind": n["kind"], "text": n["text"], "hits": n["hits"]} for n in sorted(notes, key=lambda n: -n["hits"])], "facts": facts, "recentRuns": runs, "learnedValues": sum(1 for name in data["values"] if name.startswith(flow + "|"))}
+    view = lambda n: {k: n[k] for k in ("kind", "text", "hits", "because") if k in n}
+    return {"notes": [view(n) for n in sorted(notes, key=lambda n: -n["hits"])], "facts": facts, "recentRuns": runs, "learnedValues": sum(1 for name in data["values"] if name.startswith(flow + "|"))}
+
+
+def propose(data, flow, kind, text_, because, scope=None):
+    """실행에서 나온 근거로 개선안을 낸다. 한 번 거절된 개선안은 다시 올리지 않는다."""
+    if kind not in PROPOSAL_KINDS:
+        raise ValueError(f"kind는 {PROPOSAL_KINDS} 중 하나입니다.")
+    rows = data.setdefault("proposals", [])
+    for item in rows:
+        if item["flow"] == flow and norm(item["text"]) == norm(text_):
+            if item["status"] == "rejected":
+                return {**item, "blocked": True}
+            if because not in item["because"]:
+                item["because"].append(because)
+            return item
+    item = {"id": max((p["id"] for p in rows), default=0) + 1, "flow": flow, "scope": scope or ALL, "kind": kind, "text": text_, "because": [because], "status": "proposed", "date": today()}
+    rows.append(item)
+    return item
+
+
+def decide(data, proposal_id, adopted, reason=""):
+    """채택하면 근거와 함께 절차 기억으로 옮겨 다음 실행의 brief에 나온다. 거절도 이유와 함께 남긴다."""
+    item = next((p for p in data.get("proposals", []) if p["id"] == proposal_id), None)
+    if not item:
+        raise ValueError(f"{proposal_id}번 개선안이 없습니다.")
+    item.update(status="adopted" if adopted else "rejected", decided=today(), reason=reason)
+    if adopted:
+        note(data, item["flow"], "procedure", item["text"])["because"] = item["because"]
+    return item
+
+
+def review(data, flow, scope=None):
+    """개선안의 근거 자료. 자주 고친 칸, 값이 갈리는 칸, 질문 수 추이, 이미 거절한 개선안."""
+    corrected, split = [], []
+    for name, entry in data["values"].items():
+        owner, where, field, _ = name.split("|", 3)
+        if owner != flow or (scope and where != scope):
+            continue
+        fixes = sum(c["no"] for c in entry["choices"].values())
+        if fixes:
+            corrected.append({"field": field, "key": entry["key"], "corrections": fixes})
+        if sum(1 for c in entry["choices"].values() if c["ok"] > c["no"]) > 1:
+            split.append({"field": field, "key": entry["key"], "values": list(entry["choices"])})
+    asked = [r["asked"] for r in data["runs"] if r["flow"] == flow and (not scope or r["scope"] == scope)][-5:]
+    rows = data.get("proposals", [])
+    return {
+        "corrected": sorted(corrected, key=lambda i: -i["corrections"])[:10],
+        "split": split[:10],
+        "askedTrend": asked,
+        "askedNotFalling": len(asked) >= 2 and asked[-1] > 0 and asked[-1] >= asked[-2],
+        "open": [p for p in rows if p["flow"] == flow and p["status"] == "proposed"],
+        "rejected": [{"text": p["text"], "reason": p.get("reason", "")} for p in rows if p["flow"] == flow and p["status"] == "rejected"],
+    }
 
 
 def forget(data, flow, field=None, key=None, scope=None, text_=None):
@@ -159,6 +218,16 @@ def main():
         run.add_argument("--" + name, type=int, required=True)
     for name in ("filled", "corrected"):
         run.add_argument("--" + name, type=int, default=0)
+    common("review", "끝날 때: 개선안을 만들 근거 보기")
+    idea = common("propose", "끝날 때: 근거가 있는 개선안 올리기")
+    idea.add_argument("--kind", choices=PROPOSAL_KINDS, required=True)
+    idea.add_argument("--text", required=True)
+    idea.add_argument("--because", required=True, help="이번 실행에서 나온 근거 한 문장")
+    keep = sub.add_parser("adopt", help="사용자가 반대하지 않은 개선안 채택")
+    keep.add_argument("--id", type=int, required=True)
+    drop = sub.add_parser("reject", help="사용자가 반대한 개선안 거절")
+    drop.add_argument("--id", type=int, required=True)
+    drop.add_argument("--reason", default="")
     gone = common("forget", "틀린 기억 지우기")
     gone.add_argument("--field")
     gone.add_argument("--key", default="-")
@@ -166,17 +235,29 @@ def main():
     args = parser.parse_args()
     data = load()
     show = lambda value: print(json.dumps(value, ensure_ascii=False, indent=1))
+    if args.command == "review":
+        return show(review(data, args.flow, args.scope))
+    if args.command in ("propose", "adopt", "reject"):
+        try:
+            if args.command == "propose":
+                item = propose(data, args.flow, args.kind, args.text, args.because, args.scope)
+            else:
+                item = decide(data, args.id, args.command == "adopt", getattr(args, "reason", ""))
+        except ValueError as error:
+            sys.exit(str(error))
+        save(data)
+        return show(item)
     if args.command == "brief":
         return show(brief(data, args.flow, args.scope))
     if args.command == "recall":
         return show(recall(data, args.flow, args.field, args.key, args.scope))
     if args.command == "recall-many":
-        items = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8"))
+        items = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8-sig"))
         return show([{**i, **recall(data, args.flow, i["field"], i.get("key", "-"), args.scope)} for i in items])
     if args.command == "record":
         record(data, args.flow, args.field, args.key, args.value, args.source, args.replaced, args.scope)
     elif args.command == "record-many":
-        for i in json.loads(Path(args.file).expanduser().read_text(encoding="utf-8")):
+        for i in json.loads(Path(args.file).expanduser().read_text(encoding="utf-8-sig")):
             record(data, args.flow, i["field"], i.get("key", "-"), i["value"], i.get("source", "answer"), i.get("replaced"), args.scope)
     elif args.command == "note":
         note(data, args.flow, args.kind, args.text)
