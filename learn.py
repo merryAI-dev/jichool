@@ -60,11 +60,18 @@ def today():
     return datetime.date.today().isoformat()
 
 
+def journal(data, flow, scope, kind, **detail):
+    """이번 실행에서 무엇이 나아졌는지 report가 사실대로 말할 수 있게 변화만 적어 둔다."""
+    data.setdefault("changes", []).append({"flow": flow, "scope": scope or ALL, "kind": kind, **detail})
+    data["changes"] = data["changes"][-500:]
+
+
 def record(data, flow, field, key, value, source="answer", replaced=None, scope=None):
     """accepted: 채운 값을 그대로 승인. answer: 물어서 받은 답. correction: 채운 값을 고침. always: 앞으로 계속."""
     if source not in SOURCES:
         raise ValueError(f"source는 {SOURCES} 중 하나입니다.")
     value = str(value)
+    before = recall(data, flow, field, key, scope)
     entry = data["values"].setdefault(slot(flow, scope, field, key), {"key": str(key), "choices": {}})
     choices = entry["choices"]
     if source == "always":
@@ -74,6 +81,16 @@ def record(data, flow, field, key, value, source="answer", replaced=None, scope=
     choice = choices.setdefault(value, {"ok": 0, "no": 0, "last": ""})
     choice["ok"] += 2 if source == "always" else 1
     choice["last"] = today()
+    after = recall(data, flow, field, key, scope)
+    detail = {"field": field, "key": str(key)}
+    if source == "correction" or (before["status"] != "none" and after["status"] != "mixed" and before["value"] != after["value"]):
+        journal(data, flow, scope, "corrected", **detail, old=str(replaced if replaced not in (None, "") else before["value"]), new=value)
+    elif after["status"] == "mixed" and before["status"] != "mixed":
+        journal(data, flow, scope, "split", **detail, values=[o["value"] for o in after["options"]])
+    elif before["status"] == "none":
+        journal(data, flow, scope, "learned", **detail, value=value)
+    elif before["status"] == "once" and after["status"] == "settled":
+        journal(data, flow, scope, "settled", **detail, value=value)
     return entry
 
 
@@ -93,7 +110,7 @@ def recall(data, flow, field, key, scope=None):
     return {"status": "none", "value": "", "options": []}
 
 
-def note(data, flow, kind, text_):
+def note(data, flow, kind, text_, log=True):
     if kind not in KINDS:
         raise ValueError(f"kind는 {KINDS} 중 하나입니다.")
     for item in data["notes"]:
@@ -103,6 +120,8 @@ def note(data, flow, kind, text_):
             return item
     item = {"flow": flow, "kind": kind, "text": text_, "date": today(), "hits": 1}
     data["notes"].append(item)
+    if log:
+        journal(data, flow, None, "feedback", text=text_)
     return item
 
 
@@ -140,6 +159,7 @@ def propose(data, flow, kind, text_, because, scope=None):
             return item
     item = {"id": max((p["id"] for p in rows), default=0) + 1, "flow": flow, "scope": scope or ALL, "kind": kind, "text": text_, "because": [because], "status": "proposed", "date": today()}
     rows.append(item)
+    journal(data, flow, scope, "proposed", text=text_)
     return item
 
 
@@ -150,7 +170,8 @@ def decide(data, proposal_id, adopted, reason=""):
         raise ValueError(f"{proposal_id}번 개선안이 없습니다.")
     item.update(status="adopted" if adopted else "rejected", decided=today(), reason=reason)
     if adopted:
-        note(data, item["flow"], "procedure", item["text"])["because"] = item["because"]
+        note(data, item["flow"], "procedure", item["text"], log=False)["because"] = item["because"]
+    journal(data, item["flow"], None if item["scope"] == ALL else item["scope"], "adopted" if adopted else "rejected", text=item["text"])
     return item
 
 
@@ -176,6 +197,30 @@ def review(data, flow, scope=None):
         "open": [p for p in rows if p["flow"] == flow and p["status"] == "proposed"],
         "rejected": [{"text": p["text"], "reason": p.get("reason", "")} for p in rows if p["flow"] == flow and p["status"] == "rejected"],
     }
+
+
+def report(data, flow, scope=None):
+    """끝날 때 사용자에게 말할 내용. 지난 report 이후의 변화만 돌려주고 비운다."""
+    mine = lambda c: c["flow"] in (flow, ALL) and (not scope or c["scope"] in (scope, ALL))
+    changes = [c for c in data.get("changes", []) if mine(c)]
+    data["changes"] = [c for c in data.get("changes", []) if not mine(c)]
+    pick = lambda kind: [c for c in changes if c["kind"] == kind]
+    trim = lambda c: {k: v for k, v in c.items() if k not in ("flow", "scope", "kind")}
+    runs = [r for r in data["runs"] if r["flow"] == flow and (not scope or r["scope"] == scope)][-2:]
+    result = {
+        "questions": {"before": runs[0]["asked"] if len(runs) == 2 else None, "now": runs[-1]["asked"] if runs else None},
+        "learned": len(pick("learned")),
+        "learnedExamples": [trim(c) for c in pick("learned")[:3]],
+        "settled": len(pick("settled")),
+        "corrected": [trim(c) for c in pick("corrected")[:5]],
+        "split": [trim(c) for c in pick("split")[:5]],
+        "feedback": [c["text"] for c in pick("feedback")],
+        "proposed": [c["text"] for c in pick("proposed")],
+        "adopted": [c["text"] for c in pick("adopted")],
+        "rejected": [c["text"] for c in pick("rejected")],
+    }
+    result["improved"] = bool(changes)
+    return result
 
 
 def forget(data, flow, field=None, key=None, scope=None, text_=None):
@@ -219,6 +264,7 @@ def main():
     for name in ("filled", "corrected"):
         run.add_argument("--" + name, type=int, default=0)
     common("review", "끝날 때: 개선안을 만들 근거 보기")
+    common("report", "끝날 때: 이번 실행에서 나아진 점을 사용자에게 알릴 내용")
     idea = common("propose", "끝날 때: 근거가 있는 개선안 올리기")
     idea.add_argument("--kind", choices=PROPOSAL_KINDS, required=True)
     idea.add_argument("--text", required=True)
@@ -235,6 +281,10 @@ def main():
     args = parser.parse_args()
     data = load()
     show = lambda value: print(json.dumps(value, ensure_ascii=False, indent=1))
+    if args.command == "report":
+        result = report(data, args.flow, args.scope)
+        save(data)
+        return show(result)
     if args.command == "review":
         return show(review(data, args.flow, args.scope))
     if args.command in ("propose", "adopt", "reject"):

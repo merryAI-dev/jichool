@@ -95,6 +95,41 @@ class Memory(unittest.TestCase):
         got = learn.propose(self.data, "expense", "general", "묶어서 묻는다", "2회차")
         self.assertEqual(got["because"], ["1회차", "2회차"])
 
+    def test_report_says_only_what_changed_and_empties(self):
+        learn.record(self.data, "expense", "memo", "가게", "A")
+        learn.record(self.data, "expense", "memo", "가게", "A", "accepted")
+        learn.record(self.data, "expense", "project", "가게", "B", "correction", replaced="C")
+        learn.record(self.data, "expense", "memo", "택시", "야근")
+        learn.record(self.data, "expense", "memo", "택시", "미팅")
+        learn.note(self.data, "*", "preference", "짧게")
+        item = learn.propose(self.data, "expense", "domain", "묶어 묻는다", "근거")
+        learn.decide(self.data, item["id"], True)
+        learn.log_run(self.data, "expense", None, 5, 12)
+        learn.log_run(self.data, "expense", None, 5, 3)
+        got = learn.report(self.data, "expense")
+        self.assertTrue(got["improved"])
+        self.assertEqual(got["questions"], {"before": 12, "now": 3})
+        self.assertEqual((got["learned"], got["settled"]), (2, 1))
+        self.assertEqual(got["corrected"], [{"field": "project", "key": "가게", "old": "C", "new": "B"}])
+        self.assertCountEqual(got["split"][0]["values"], ["미팅", "야근"])
+        self.assertEqual((got["feedback"], got["proposed"], got["adopted"]), (["짧게"], ["묶어 묻는다"], ["묶어 묻는다"]))
+        again = learn.report(self.data, "expense")
+        self.assertFalse(again["improved"])
+        self.assertEqual(again["learned"], 0)
+
+    def test_report_keeps_other_scopes_for_their_own_run(self):
+        learn.record(self.data, "tongjang", "P", "가게", "A", scope="시트1")
+        learn.record(self.data, "tongjang", "P", "가게", "B", scope="시트2")
+        self.assertEqual(learn.report(self.data, "tongjang", "시트1")["learned"], 1)
+        self.assertEqual(learn.report(self.data, "tongjang", "시트2")["learned"], 1)
+
+    def test_accepting_a_settled_value_is_not_news(self):
+        for _ in range(2):
+            learn.record(self.data, "expense", "memo", "가게", "A", "accepted")
+        learn.report(self.data, "expense")
+        learn.record(self.data, "expense", "memo", "가게", "A", "accepted")
+        self.assertFalse(learn.report(self.data, "expense")["improved"])
+
     def test_forget(self):
         learn.record(self.data, "expense", "memo", "가게", "A")
         self.assertEqual(learn.forget(self.data, "expense", "memo", "가게"), 1)
