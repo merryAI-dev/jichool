@@ -18,6 +18,6 @@ jobs:
       - name: 테스트
         shell: bash
         run: |
-          for test in test_amaranth test_expense test_taxinvoice test_expertfee test_learn test_tongjang; do
+          for test in test_amaranth test_expense test_taxinvoice test_payproof test_expertfee test_learn test_tongjang; do
             uv run "$test.py"
           done

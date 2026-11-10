@@ -258,7 +258,7 @@ class Client:
             "issDtFrom": start, "issDtTo": end, "regNb": "", "trNm": "", "amFrom": "", "amTo": "",
             "sunginNb": "", "tabFg": "1", "baNbList": [], "isShowCardPrivacy": "", "isShowAccountPrivacy": ""})
 
-    def cards(self, start, end, card_name):
+    def cards(self, start, end, card_name, include_applied=False):
         params = {"issDtFrom": start, "issDtTo": end, "regNb": "", "trNm": "",
                   "amFrom": "", "amTo": "", "sunginNb": "", "tabFg": "1",
                   "baNbList": [], "isShowCardPrivacy": "", "isShowAccountPrivacy": ""}
@@ -279,6 +279,8 @@ class Client:
                 raise ExpenseError("선택한 카드 또는 기간 밖의 거래가 반환됐습니다.")
             row["cardFg"] = card_types[row["cardCd"]]
             row["cardNm"] = card_name
+        if include_applied:
+            return rows
         return [row for row in rows if row.get("appYn") == "N"
                 and won(row["sunginAm"]) != won(row.get("appSumAm"))]
 
