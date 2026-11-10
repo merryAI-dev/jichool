@@ -65,4 +65,4 @@ uv run "$SKILL_DIR/learn.py" brief --flow evidence --scope <시트 ID>
 
 `search_files`로 폴더 안 목록과 파일 크기를 다시 읽어 원본과 대조한다. 시트 링크 칸은 사용자가 원할 때만, 비어 있는 칸에 승인받아 쓴다. 기존 값은 덮어쓰지 않는다. 쓴 뒤 부족한 증빙 목록을 짧게 남긴다.
 
-끝나면 남긴다. 파일 종류를 사용자가 고쳐 줬으면(예: "이건 견적서야") `learn.py record --flow evidence --field 파일종류 --key <파일명에서 번호·이름을 뺀 부분> --value <증빙이름> --source correction`으로, 질문 수는 `learn.py run --flow evidence`로 남긴다. 다음부터 같은 모양의 파일명은 묻지 않고 분류한다.
+끝나면 남긴다. 파일 종류를 사용자가 고쳐 줬으면(예: "이건 견적서야") `learn.py record --flow evidence --field 파일종류 --key <파일명에서 번호·이름을 뺀 부분> --value <증빙이름> --source correction`으로, 질문 수는 `learn.py run --flow evidence`로 남긴다. 다음부터 같은 모양의 파일명은 묻지 않고 분류한다. 마지막에 `learn.py report --flow evidence --scope <시트 ID>`로 이번에 나아진 점을 알린다.

@@ -274,7 +274,7 @@ uv run "$SKILL_DIR/tongjang.py" verify ~/.config/mysc-ledger/state/ranges.json w
 uv run "$SKILL_DIR/tongjang.py" reflect ~/.config/mysc-ledger/state/ranges.json --scope <시트 ID> --author <닉네임> --card "<카드>"
 ```
 
-대화에서 사용자가 말투·절차를 지적했으면 [SKILL.md](SKILL.md)의 방식대로 `learn.py note`로 남긴다.
+대화에서 사용자가 말투·절차를 지적했으면 [SKILL.md](SKILL.md)의 방식대로 `learn.py note`로 남긴다. 그다음 [SKILL.md](SKILL.md)의 4~5번대로 개선안을 내고, `learn.py report --flow tongjang --scope <시트 ID>`로 이번에 나아진 점을 알린다.
 
 ## 정확도 다시 재기
 

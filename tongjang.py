@@ -20,6 +20,11 @@ import re
 import sys
 from pathlib import Path
 
+# Windows 콘솔·파이프 기본 인코딩 대신 UTF-8로 내보내야 AI가 한글을 그대로 읽는다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 BANK_TAB = "통장내역(MYSC법인계좌/e나라도움제외)"
 BANK_TAB_PREFIX = "통장내역"
 USAGE_TAB = "사용내역(통장내역기준/취소내역,불인정포함)"
@@ -127,12 +132,12 @@ def history_layout(path):
     path = Path(path).expanduser()
     if path.suffix.lower() != ".json":
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     return {k: data[k] for k in ("columns", "bankTab") if data.get(k)}
 
 
 def history_header(path):
-    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8-sig"))
     return data["values"][0]
 
 
@@ -140,7 +145,7 @@ def load_history(path):
     path = Path(path).expanduser()
     first_row = FIRST_ROW
     if path.suffix.lower() == ".json":
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         columns = data.get("columns")
         if data.get("startRow") != HEADER_ROW and not columns:
             raise ToolError("통장내역 탭은 8행(머리글)부터 읽어야 합니다. 그 위는 읽지 않습니다. 머리글이 다른 행이면 사용자에게 확인한 뒤 칸 배치를 적어 주세요.")
@@ -287,7 +292,7 @@ def evaluate(rows):
 
 
 def read_bank(path, order):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     items = data["rows"] if isinstance(data, dict) else data
     rows = []
     for item in items:
@@ -533,7 +538,7 @@ def read_matrix(path):
     path = Path(path).expanduser()
     suffix = path.suffix.lower()
     if suffix == ".json":
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return [data["headers"]] + data["rows"] if isinstance(data, dict) else data
     if suffix == ".csv":
         raw = path.read_bytes()
@@ -551,7 +556,7 @@ def read_matrix(path):
     if suffix == ".xls":
         raw = path.read_bytes()
         if b"<table" in raw[:20000].lower():
-            for encoding in ("utf-8", "cp949"):
+            for encoding in ("utf-8-sig", "cp949"):
                 try:
                     body = raw.decode(encoding)
                     break
@@ -842,19 +847,19 @@ def main():
             references = [row for path in args.reference for row in load_history(path)]
             write_json(attach_learned({**plan(load_history(args.history), read_bank(args.bank, args.order), references), "layout": history_layout(args.history)}, args.scope), args.out)
         elif args.command == "reflect":
-            result = json.loads(Path(args.ranges).expanduser().read_text(encoding="utf-8"))
+            result = json.loads(Path(args.ranges).expanduser().read_text(encoding="utf-8-sig"))
             write_json(reflect(result, args.scope, {"작성자": args.author, "카드": args.card}))
         elif args.command == "expenses":
             items = fetch_expenses(args.since, args.until)
             write_json(items, args.out)
             write_json({"rows": len(items), "projects": collections.Counter(i["project"] for i in items).most_common()})
         elif args.command == "attach":
-            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8"))
+            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8-sig"))
             write_json(attach_expenses(load(args.plan), load(args.expenses), args.project), args.plan)
         elif args.command == "bank":
             write_json(normalize_bank(read_matrix(args.source), args.bank), args.out)
         elif args.command in ("guard", "verify"):
-            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8"))
+            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8-sig"))
             problems = (guard if args.command == "guard" else verify)(load(args.ranges), load(args.current))
             write_json({"ok": not problems, "cells": problems})
             sys.exit(0 if not problems else 3)
@@ -865,7 +870,7 @@ def main():
         elif args.command == "eval-score":
             answers = {}
             for path in args.answers:
-                answers.update({item["id"]: item for item in json.loads(Path(path).read_text(encoding="utf-8"))["answers"]})
+                answers.update({item["id"]: item for item in json.loads(Path(path).read_text(encoding="utf-8-sig"))["answers"]})
             report, review = eval_score(load_history(args.history), answers)
             write_json(report)
             if args.review:
@@ -873,7 +878,7 @@ def main():
                 lines += [f"| {p['no']} | {p['payee']} | {p['human']} | {p['claude']} |  |" for p in review]
                 Path(args.review).write_text("\n".join(lines) + "\n", encoding="utf-8")
         else:
-            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8"))
+            load = lambda p: json.loads(Path(p).expanduser().read_text(encoding="utf-8-sig"))
             planned, answers = load(args.plan), load(args.answers)
             scope = planned.get("scope", "")
             author = args.author or remembered(scope, "작성자")
