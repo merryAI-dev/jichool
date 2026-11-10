@@ -14,7 +14,7 @@
 - 실명·계좌번호를 노트·로그·외부로 옮기지 않는다. 시트에 쓰는 값과 사용자 확인 화면에만 쓴다.
 - 공급가액·부가세(M·N)는 후보다. 사용자가 승인해야 쓴다.
 - MYSCube 플랫폼 코드에는 시트 쓰기 경로를 만들지 않는다. 시트 쓰기는 이 스킬이 사용자 계정으로 한다.
-- 쓰기 전에 반드시 행 목록을 보여주고 승인을 받는다. 기존 행은 고치지 않고 새 행만 쓴다.
+- 쓰기 전에 반드시 행 목록을 보여주고 승인을 받는다. 은행 원본은 시트별로 한 번 동의받으면 다음부터 먼저 쓴다(4-1단계). 기존 행은 고치지 않고 새 행만 쓴다.
 
 ## 말하는 방식
 
@@ -190,6 +190,23 @@ uv run "$SKILL_DIR/tongjang.py" attach ~/.config/mysc-ledger/state/plan.json ~/.
 
 첫 명령이 내 결의의 프로젝트 목록을 보여준다. 이 사업에 해당하는 이름을 사용자에게 한 번 확인해 기억(`learn.py record --source always`)에 기억한다. 행마다 `expense`가 붙는다.
 
+### 4-1. 은행 원본 먼저 쓰기
+
+은행 값은 판단 없이 옮기는 칸이다. `balanceIssues`가 없으면 적요를 기다리지 않고 먼저 쓴다.
+
+`learn.py recall --flow tongjang --scope <시트 ID> --field 원본먼저`가 `yes`면 묻지 않고 쓴다. 기억이 없으면 새 거래 표를 보여 주고 한 번만 묻는다. 동의하면 `--value yes --source always`로 남긴다.
+
+> **확인해 주세요**
+> 1. 은행 원본은 앞으로 확인 없이 먼저 넣을까요?
+
+```bash
+uv run "$SKILL_DIR/tongjang.py" paste ~/.config/mysc-ledger/state/plan.json --out ~/.config/mysc-ledger/state/ranges-bank.json
+```
+
+6단계와 같이 `guard` → 범위대로 `update_values` → `formatCopy` → `verify`를 거친다. 빈 칸이 아니거나 잔액이 이어지지 않으면 쓰지 않고 알린다. 결과는 "새 거래 N건 넣었어요" 한 줄로 알린다.
+
+판단 칸을 이번에 끝내지 못하면 `plan.json`을 `pending-<첫 No>.plan.json`으로 보관한다. 원본이 이미 시트에 있어 다음 `plan`에는 새 거래로 나오지 않으므로, 다음 실행은 보관한 계획부터 이어서 끝낸다.
+
 ### 5. 판단하고 확인 받기
 
 행마다 `learned`가 붙는다. 이 시트에서 사용자가 지난번에 승인하거나 고친 값이다.
@@ -238,11 +255,12 @@ uv run "$SKILL_DIR/tongjang.py" attach ~/.config/mysc-ledger/state/plan.json ~/.
 ```
 
 ```bash
-uv run "$SKILL_DIR/tongjang.py" finalize plan.json answers.json usage_template.json --out ~/.config/mysc-ledger/state/ranges.json
+uv run "$SKILL_DIR/tongjang.py" finalize plan.json answers.json usage_template.json --stage decide --out ~/.config/mysc-ledger/state/ranges.json
 ```
 
 - 새 행의 부가세(N열)에는 양식 수식(`=F행-M행`, 출금액에서 공급가액을 뺀 값)이 깔려 있다. 뜻을 확인하고 승인받은 값으로 덮어쓴다. `answers.json`에 `M`과 `N`을 함께 적고, 둘을 더해 출금액과 같은지 확인한다. 이미 있는 행은 고치지 않는다.
 - 지출구분(사용내역 F열): 인터넷출금이체·전자금융 등은 `계좌이체`, 체크카드·직불출금·카드입금은 이 시트에서 가장 많이 쓴 `법인카드(뒷자리)`다. 사용내역 F열을 읽어 값을 정해 `answers.json`에 `"card": "법인카드(0000)"`로 적는다. 이 시트에 카드가 두 장 이상 쓰인 적이 있으면 어느 카드인지 확인 표에 한 줄로 묻는다. 양식의 F열 수식은 덮어쓴다.
+- 4-1단계로 원본을 먼저 썼으면 `--stage decide`(판단 칸과 사용내역만)를 쓴다. 원본을 쓰지 않았으면 `--stage`를 뺀다.
 - 작성자와 카드는 지난번 값을 쓴다. 처음이면 한 번 물어 `--author`와 `answers.json`의 `card`로 넘긴다.
 - `unanswered`가 있으면 묻거나, 비워 두어도 되는지 확인한다.
 - `warnings`를 사용자에게 알린다.
